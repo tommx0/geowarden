@@ -31,13 +31,27 @@ Everything else is dropped before it reaches SSH, your web server or your Docker
 
 <p align="center">
   <img src="docs/screenshots/world-map.png" alt="World map with blocked requests in red and allowed requests in green" width="820">
-  <br><sub>World map: blocked requests in red, allowed requests in green, brighter means more requests (demo data)</sub>
+  <br><sub>World map: blocked requests in red, allowed requests in green, brighter means more requests</sub>
 </p>
 
-<p align="center">
-  <img src="docs/screenshots/top-countries.png" alt="Top 10 allowed and blocked countries" width="640">
-  <br><sub>Top 10 countries for allowed and blocked requests (demo data)</sub>
-</p>
+<table>
+  <tr>
+    <td><img src="docs/screenshots/top-countries.png" alt="Top 10 allowed and blocked countries"></td>
+    <td><img src="docs/screenshots/country-addresses.png" alt="Top 10 addresses of one country"></td>
+  </tr>
+  <tr>
+    <td align="center"><sub>Top 10 countries for allowed and blocked requests</sub></td>
+    <td align="center"><sub>Type a country code to see its top 10 addresses</sub></td>
+  </tr>
+  <tr>
+    <td colspan="2"><img src="docs/screenshots/top-addresses.png" alt="Top 10 allowed and blocked addresses"></td>
+  </tr>
+  <tr>
+    <td colspan="2" align="center"><sub>Top 10 source addresses overall, with their country</sub></td>
+  </tr>
+</table>
+
+<sub>The statistics screenshots show demo data with documentation addresses (RFC 5737 and RFC 3849).</sub>
 
 <table>
   <tr>
@@ -124,7 +138,7 @@ Open **Statistics and world map** in the menu. The screen shows when counting st
 | View | What it shows |
 |---|---|
 | **World map** | Every country colored by its requests: red for blocked, green for allowed. Brighter means more requests. Countries without requests stay muted. |
-| **Top 10 countries** | The ten countries with the most allowed and the most blocked requests, side by side |
+| **Top 10 countries** | The ten countries with the most allowed and the most blocked requests, side by side. Type a country code (e.g. `cn`) to see the top 10 addresses of that country and their share of its requests. |
 | **Top 10 addresses** | The ten source addresses with the most allowed and the most blocked requests (IPv6 grouped by /64 network) |
 | **Reset statistics** | Clears all counters. Counting starts again from that moment. |
 
@@ -132,7 +146,7 @@ Good to know:
 
 - A request is the first packet of a new connection that reaches the country check. Traffic on open ports, VPN interfaces and established connections is not counted. A client that retries a blocked connection counts once per attempt.
 - The statistics live in the kernel. They keep counting through the daily reload, but start over after a reboot or when you turn blocking off and on again.
-- Up to 65,536 addresses per list are tracked. If a list is full, new addresses still count in the totals, and the map tells you how many requests it cannot place.
+- Each of the four lists (IPv4 and IPv6, allowed and blocked) keeps up to `STATS_MAX` addresses, 10,000 by default. One address needs about 160 to 280 bytes of kernel memory depending on the number of CPUs, so the default uses at most about 6 to 11 MB. If a list is full, new addresses still count in the totals, and the views tell you how many requests they cannot place. The busiest addresses are usually listed early, so the top 10 stay meaningful.
 - The map needs a terminal with 256 colors and at least 44×16 characters. A wider terminal gives a more detailed map.
 
 ### Configuration
@@ -146,6 +160,7 @@ All settings live in `/etc/geowarden.conf`. The menu edits `ENABLED` and `COUNTR
 | `WAN_IF` | Interfaces to filter. Empty means the interfaces of the default routes | empty |
 | `OPEN_TCP` | TCP ports open to the whole world | `80` (Let's Encrypt HTTP-01) |
 | `OPEN_UDP` | UDP ports open to the whole world | `41641` (Tailscale) |
+| `STATS_MAX` | Most addresses per statistics list. `0` turns the statistics off. A change starts the statistics over | `10000` |
 
 Example:
 

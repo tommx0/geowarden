@@ -1,3 +1,12 @@
+geowarden (1.3.0) stable; urgency=medium
+
+  * STATS_MAX in /etc/geowarden.conf limits the addresses per statistics
+    list (default 10000, 0 turns the statistics off).
+  * Top 10 countries: typing a country code shows the top 10 allowed and
+    blocked addresses of that country.
+
+ -- Thomas Marx <103289949+tommx0@users.noreply.github.com>  Mon, 26 Oct 2026 16:00:00 +0000
+
 geowarden (1.2.0) stable; urgency=medium
 
   * Request statistics: allowed and blocked requests are counted per source

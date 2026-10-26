@@ -591,14 +591,22 @@ def fg(color):
     return f"\033[38;5;{color}m"
 
 
-def show_screen(lines):
-    """Shows colored text on the plain terminal until Enter is pressed."""
-    sys.stdout.write("\033[H\033[2J" + "\n".join(lines) + "\n\n  Press Enter to go back ")
+def show_screen(lines, prompt="Press Enter to go back "):
+    """Shows colored text on the plain terminal; returns what was typed before Enter."""
+    sys.stdout.write("\033[H\033[2J" + "\n".join(lines) + "\n\n  " + prompt)
     sys.stdout.flush()
     try:
-        input()
+        return input()
     except (EOFError, KeyboardInterrupt):
-        pass
+        return ""
+
+
+def untracked_note(countries):
+    """Note about requests that are only in the totals because an address list was full."""
+    missing = counter("allowed") + counter("blocked") - sum(sum(v) for v in countries.values())
+    if missing <= 0:
+        return []
+    return [f"  {missing:,} requests are only in the totals: an address list is full (STATS_MAX)"]
 
 
 def header(title, since):
@@ -690,44 +698,66 @@ def show_map(since):
     lines += ["", f"  {shade(RED)} blocked requests   {shade(GREEN)} allowed requests   (darker = fewer)",
               f"  {fg(QUIET_ALLOWED)}█{RESET} allowed country, no requests   "
               f"{fg(QUIET_BLOCKED)}█{RESET} blocked country, no requests"]
-    on_map = sum(sum(v) for v in countries.values())
-    missing = counter("allowed") + counter("blocked") - on_map
-    if missing > 0:
-        lines.append(f"  {missing:,} requests are only in the totals (address table full)")
-    show_screen(lines)
+    show_screen(lines + untracked_note(countries))
 
 
-def show_top(since, by_country):
-    countries, addrs = collect_stats()
-    # Countries: rank, name, code, count and a bar; addresses: rank, address, code, count
-    label_width, bar_width = (14, 6) if by_country else (21, 0)
-    width = 3 + label_width + 4 + 7 + (bar_width + 1 if bar_width else 0) + 3
+def top_lines(title, since, ranked, label_width, tag_width, bars):
+    """Allowed and blocked top 10 side by side. ranked: {"allow"/"block": [(n, label, tag)]},
+    tag is a short text such as the country code."""
+    width = 3 + label_width + 1 + tag_width + 1 + 7 + (7 if bars else 0) + 3
     cols = {}
-    for kind, color, i in (("allow", GREEN[2], 0), ("block", RED[2], 1)):
-        if by_country:
-            ranked = sorted(((v[i], country_name(cc), cc) for cc, v in countries.items() if v[i]), reverse=True)
-        else:
-            ranked = sorted(addrs[kind], reverse=True)
-        ranked = ranked[:10]
-        top = ranked[0][0] if ranked else 1
+    for kind, color in (("allow", GREEN[2]), ("block", RED[2])):
+        top10 = sorted(ranked[kind], reverse=True)[:10]
+        top = top10[0][0] if top10 else 1
         cols[kind] = []
-        for r, (n, label, cc) in enumerate(ranked):
-            line = f"{r + 1:>2} {label[:label_width]:<{label_width}} {cc.upper():<2} {n:>7,}"
-            if bar_width:
-                line += " " + fg(color) + "▇" * max(1, round(bar_width * n / top)) + RESET
+        for r, (n, label, tag) in enumerate(top10):
+            line = f"{r + 1:>2} {label[:label_width]:<{label_width}} {tag:>{tag_width}} {n:>7,}"
+            if bars:
+                line += " " + fg(color) + "▇" * max(1, round(6 * n / top)) + RESET
             cols[kind].append(line)
-    title = "Top 10 countries" if by_country else "Top 10 addresses (IPv6 grouped by /64)"
     lines = header(title, since)
     lines.append(f"  {BOLD}{fg(GREEN[2])}{'Allowed':<{width}}{fg(RED[2])}Blocked{RESET}")
     lines.append("")
+    if not cols["allow"] and not cols["block"]:
+        return lines + ["  No requests counted yet."]
+    for kind in cols:
+        cols[kind] = cols[kind] or ["   no requests"]
     for r in range(10):
         left = cols["allow"][r] if r < len(cols["allow"]) else ""
         right = cols["block"][r] if r < len(cols["block"]) else ""
         visible = len(re.sub(r"\033\[[0-9;]*m", "", left))
         lines.append("  " + left + " " * (width - visible) + right)
-    if not cols["allow"] and not cols["block"]:
-        lines.append("  No requests counted yet.")
-    show_screen(lines)
+    return lines
+
+
+def show_top_addresses(since):
+    countries, addrs = collect_stats()
+    ranked = {k: [(n, addr, cc.upper()) for n, addr, cc in v] for k, v in addrs.items()}
+    show_screen(top_lines("Top 10 addresses (IPv6 grouped by /64)", since, ranked, 21, 2, False)
+                + untracked_note(countries))
+
+
+def show_top_countries(since):
+    """Top 10 countries; typing a country code opens the top 10 addresses of that country."""
+    countries, addrs = collect_stats()
+    ranked = {k: [(v[i], country_name(cc), cc.upper()) for cc, v in countries.items() if v[i]]
+              for i, k in enumerate(("allow", "block"))}
+    note = []
+    while True:
+        lines = top_lines("Top 10 countries", since, ranked, 14, 2, True) + untracked_note(countries) + note
+        cc = show_screen(lines, "Country code for its top 10 addresses, or Enter to go back: ").strip().lower()
+        if not cc:
+            return
+        if cc not in countries:
+            note = ["", f"  No requests from {cc.upper()}."]
+            continue
+        note = []
+        total = countries[cc]
+        by_addr = {k: [(n, addr, f"{100 * n / total[i]:.0f}%") for n, addr, c in addrs[k] if c == cc]
+                   for i, k in enumerate(("allow", "block"))}
+        show_screen(top_lines(f"Top 10 addresses from {country_name(cc)} ({cc.upper()})", since,
+                              by_addr, 21, 4, False)
+                    + ["", "  % = share of the allowed or blocked requests from this country"])
 
 
 def reset_stats():
@@ -751,6 +781,9 @@ def reset_stats():
 def statistics():
     while True:
         since = stats_since()
+        if read_conf()[1].get("STATS_MAX") == "0":
+            msg(f"Statistics are turned off (STATS_MAX=\"0\" in {CONF}).", 8, 64)
+            return
         if since is None:
             msg("No statistics available. They are collected while blocking is on "
                 "and the rules are loaded.", 9, 64)
@@ -768,9 +801,9 @@ def statistics():
         if choice == "1":
             show_map(since)
         elif choice == "2":
-            show_top(since, True)
+            show_top_countries(since)
         elif choice == "3":
-            show_top(since, False)
+            show_top_addresses(since)
         else:
             reset_stats()
 

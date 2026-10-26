@@ -25,6 +25,10 @@ fi
 WAN_IF=$(echo $WAN_IF)
 [ -n "$WAN_IF" ] || { echo "No public interface found - please set WAN_IF in $CONF" >&2; exit 1; }
 
+# Older configurations have no STATS_MAX
+STATS_MAX=${STATS_MAX-10000}
+[[ $STATS_MAX =~ ^[0-9]+$ ]] || { echo "STATS_MAX in $CONF must be a number" >&2; exit 1; }
+
 # Geolocation data: "IP Geolocation by DB-IP" (https://db-ip.com), license CC BY 4.0.
 # Published monthly; early in the month it may not be out yet, then use the previous month.
 SRC="https://download.db-ip.com/free/dbip-country-lite"
@@ -84,12 +88,12 @@ V6NET="ffff:ffff:ffff:ffff::"
 	echo "    ip6 saddr fe80::/10 accept"
 	echo "    icmpv6 type { nd-neighbor-solicit, nd-neighbor-advert, nd-router-advert } accept"
 	# Counting in rules of their own: a full set must never change the verdict
-	echo "    ip saddr @allow4 update @stat_allow4 { ip saddr counter }"
+	[ "$STATS_MAX" -gt 0 ] && echo "    ip saddr @allow4 update @stat_allow4 { ip saddr counter }"
 	echo "    ip saddr @allow4 counter name allowed accept"
-	echo "    ip6 saddr @allow6 update @stat_allow6 { ip6 saddr and $V6NET counter }"
+	[ "$STATS_MAX" -gt 0 ] && echo "    ip6 saddr @allow6 update @stat_allow6 { ip6 saddr and $V6NET counter }"
 	echo "    ip6 saddr @allow6 counter name allowed accept"
-	echo "    meta nfproto ipv4 update @stat_block4 { ip saddr counter }"
-	echo "    meta nfproto ipv6 update @stat_block6 { ip6 saddr and $V6NET counter }"
+	[ "$STATS_MAX" -gt 0 ] && echo "    meta nfproto ipv4 update @stat_block4 { ip saddr counter }"
+	[ "$STATS_MAX" -gt 0 ] && echo "    meta nfproto ipv6 update @stat_block6 { ip6 saddr and $V6NET counter }"
 	echo "    counter name blocked drop"
 	echo "  }"
 } > "$WORK/body.nft"
@@ -110,20 +114,28 @@ V6NET="ffff:ffff:ffff:ffff::"
 	echo "add table inet geowarden"
 	echo "delete table inet geowarden"
 	echo "table inet geowarden {"
-	for s in allow4 block4; do echo "  set stat_$s { type ipv4_addr; size 65536; flags dynamic; }"; done
-	for s in allow6 block6; do echo "  set stat_$s { type ipv6_addr; size 65536; flags dynamic; }"; done
+	if [ "$STATS_MAX" -gt 0 ]; then
+		for s in allow4 block4; do echo "  set stat_$s { type ipv4_addr; size $STATS_MAX; flags dynamic; }"; done
+		for s in allow6 block6; do echo "  set stat_$s { type ipv6_addr; size $STATS_MAX; flags dynamic; }"; done
+	fi
 	echo "  counter allowed { }"
 	echo "  counter blocked { }"
 	cat "$WORK/body.nft"
 	echo "}"
 } > "$WORK/new.nft"
 
-if [ -s "$STATS" ] && nft -c -f "$WORK/keep.nft" 2>/dev/null; then
+# The size of a set cannot be changed, so a new STATS_MAX also means a new table
+size=$(nft list set inet geowarden stat_block4 2>/dev/null | sed -n 's/^[[:space:]]*size \([0-9]*\).*/\1/p' || true)
+if [ "${size:-0}" = "$STATS_MAX" ] && { [ -s "$STATS" ] || [ "$STATS_MAX" = 0 ]; } \
+	&& nft -c -f "$WORK/keep.nft" 2>/dev/null; then
 	nft -f "$WORK/keep.nft"
 else
 	nft -c -f "$WORK/new.nft"
 	nft -f "$WORK/new.nft"
-	mkdir -p "${STATS%/*}"
-	date +%s > "$STATS"
+	rm -f "$STATS"
+	if [ "$STATS_MAX" -gt 0 ]; then
+		mkdir -p "${STATS%/*}"
+		date +%s > "$STATS"
+	fi
 fi
 echo "geowarden: loaded $n4 IPv4 and $n6 IPv6 ranges ($(wc -w <<< "$COUNTRIES") countries, interface: $WAN_IF)"
