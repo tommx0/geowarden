@@ -10,6 +10,7 @@ trap 'rm -rf "$B"' EXIT
 install -D -m 755 src/geowarden          "$B/usr/sbin/geowarden"
 install -D -m 755 src/geowarden-apply    "$B/usr/sbin/geowarden-apply"
 install -D -m 644 src/geowarden.conf     "$B/usr/share/geowarden/geowarden.conf"
+install -D -m 644 src/worldmap.txt       "$B/usr/share/geowarden/worldmap.txt"
 install -D -m 644 src/geowarden.service  "$B/usr/lib/systemd/system/geowarden.service"
 install -D -m 644 src/geowarden.timer    "$B/usr/lib/systemd/system/geowarden.timer"
 install -D -m 644 src/README            "$B/usr/share/doc/geowarden/README"

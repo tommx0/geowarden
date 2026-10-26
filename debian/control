@@ -12,5 +12,6 @@ Description: country allowlist for incoming connections via nftables
  is refreshed daily by a systemd timer. Established connections, VPN
  interfaces and open ports are exempt.
  .
- Managed with the menu tool "geowarden": turn blocking on/off and choose
- countries by continent.
+ Managed with the menu tool "geowarden": turn blocking on/off, choose
+ countries by continent and view allowed and blocked requests on a world
+ map and in top 10 lists.

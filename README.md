@@ -25,8 +25,19 @@ Everything else is dropped before it reaches SSH, your web server or your Docker
 - **Fails safe.** A failed download or a broken data file leaves the current rules in place. Rules are swapped in a single atomic nftables transaction.
 - **Leaves other firewalls alone.** geowarden only manages its own table (`inet geowarden`). Docker, ufw, CrowdSec and others are not touched.
 - **IPv4 and IPv6.** Both address families are filtered.
+- **See who is knocking.** A colored world map and top 10 lists show allowed and blocked requests by country and by address. You can see when counting started and reset the statistics at any time.
 
 ## Screenshots
+
+<p align="center">
+  <img src="docs/screenshots/world-map.png" alt="World map with blocked requests in red and allowed requests in green" width="820">
+  <br><sub>World map: blocked requests in red, allowed requests in green, brighter means more requests (demo data)</sub>
+</p>
+
+<p align="center">
+  <img src="docs/screenshots/top-countries.png" alt="Top 10 allowed and blocked countries" width="640">
+  <br><sub>Top 10 countries for allowed and blocked requests (demo data)</sub>
+</p>
 
 <table>
   <tr>
@@ -106,6 +117,24 @@ sudo nft list chain inet geowarden prerouting
 | Emergency off until the next timer run | `sudo nft delete table inet geowarden` |
 | Show recent runs and errors | `journalctl -u geowarden.service` |
 
+### Statistics and world map
+
+Open **Statistics and world map** in the menu. The screen shows when counting started and how many requests were allowed and blocked since then. From there you can open:
+
+| View | What it shows |
+|---|---|
+| **World map** | Every country colored by its requests: red for blocked, green for allowed. Brighter means more requests. Countries without requests stay muted. |
+| **Top 10 countries** | The ten countries with the most allowed and the most blocked requests, side by side |
+| **Top 10 addresses** | The ten source addresses with the most allowed and the most blocked requests (IPv6 grouped by /64 network) |
+| **Reset statistics** | Clears all counters. Counting starts again from that moment. |
+
+Good to know:
+
+- A request is the first packet of a new connection that reaches the country check. Traffic on open ports, VPN interfaces and established connections is not counted. A client that retries a blocked connection counts once per attempt.
+- The statistics live in the kernel. They keep counting through the daily reload, but start over after a reboot or when you turn blocking off and on again.
+- Up to 65,536 addresses per list are tracked. If a list is full, new addresses still count in the totals, and the map tells you how many requests it cannot place.
+- The map needs a terminal with 256 colors and at least 44×16 characters. A wider terminal gives a more detailed map.
+
 ### Configuration
 
 All settings live in `/etc/geowarden.conf`. The menu edits `ENABLED` and `COUNTRIES` for you. Edit the others by hand, then reload the rules.
@@ -155,6 +184,8 @@ These are always accepted:
 - the ports in `OPEN_TCP` and `OPEN_UDP`
 - DHCP replies, IPv6 link-local traffic and IPv6 neighbor discovery
 
+Every request that reaches the country check is counted per source address in dynamic nftables sets (`stat_allow4`, `stat_block4`, `stat_allow6`, `stat_block6`). The menu looks up the country of each address in the cached DB-IP file when you open the statistics. The daily reload replaces only the rule chain and the allowlist, so the counters keep running.
+
 ## Uninstall
 
 ```bash
@@ -174,3 +205,6 @@ geowarden is released under the [MIT License](LICENSE).
 
 The geo data is downloaded at runtime and is not part of this project:
 [IP Geolocation by DB-IP](https://db-ip.com), licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
+
+The world map ([src/worldmap.txt](src/worldmap.txt)) is generated with [tools/make-worldmap.py](tools/make-worldmap.py) from
+[Natural Earth](https://www.naturalearthdata.com/) 1:50m country borders, which are in the public domain.

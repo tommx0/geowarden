@@ -10,6 +10,7 @@ Menu:           geowarden                          (as root)
 Configuration:  /etc/geowarden.conf
 Apply:          systemctl start geowarden.service  (or /usr/sbin/geowarden-apply)
 Kill switch:    nft delete table inet geowarden    (until the next timer run)
+Statistics:     geowarden -> Statistics and world map (start over after a reboot)
 Updates:        geowarden.timer, at boot and daily
 Geo data:       /var/cache/geowarden, monthly from DB-IP
 
@@ -17,4 +18,4 @@ Blocking is OFF after installation. Before turning it on, make sure you are
 connecting from an allowed country or via an unfiltered interface (VPN).
 
 Country data: "IP Geolocation by DB-IP" (https://db-ip.com), licensed under
-CC BY 4.0.
+CC BY 4.0. World map: Natural Earth (https://www.naturalearthdata.com), public domain.

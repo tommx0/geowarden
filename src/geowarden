@@ -2,17 +2,37 @@
 """geowarden - menu for the country allowlist (nftables table "inet geowarden").
 
 Reads and writes /etc/geowarden.conf and applies changes immediately
-via /usr/sbin/geowarden-apply.
+via /usr/sbin/geowarden-apply. Shows the request statistics that the rules
+collect per source address, as a world map and as top 10 lists.
 """
+import bisect
+import gzip
+import json
+import math
 import os
 import re
+import shutil
+import socket
 import subprocess
 import sys
+import time
 import unicodedata
 
 CONF = "/etc/geowarden.conf"
 APPLY = "/usr/sbin/geowarden-apply"
+CACHE = "/var/cache/geowarden"
+STATS_SINCE = "/run/geowarden/stats-since"
+STAT_SETS = ("stat_allow4", "stat_allow6", "stat_block4", "stat_block6")
+WORLDMAP = "/usr/share/geowarden/worldmap.txt"
 TITLE = "geowarden"
+
+# 256-color palette for the map and the top 10 bars
+RED = (124, 160, 196)     # blocked requests, few -> many
+GREEN = (28, 34, 46)      # allowed requests, few -> many
+QUIET_ALLOWED = 65        # allowed country without requests
+QUIET_BLOCKED = 240       # blocked country without requests
+RESET = "\033[0m"
+BOLD = "\033[1m"
 
 CONTINENTS = [
     ("EU", "Europe"),
@@ -330,11 +350,11 @@ def table_loaded():
                           capture_output=True).returncode == 0
 
 
-def blocked_count():
-    r = subprocess.run(["nft", "list", "counter", "inet", "geowarden", "blocked"],
+def counter(name):
+    r = subprocess.run(["nft", "list", "counter", "inet", "geowarden", name],
                        capture_output=True, text=True)
     m = re.search(r"packets (\d+)", r.stdout)
-    return m.group(1) if m else "-"
+    return int(m.group(1)) if m else 0
 
 
 def wan_ifaces():
@@ -395,14 +415,15 @@ def show_status():
         f"  {name:<38} {sum(1 for c in a if COUNTRIES.get(c, ('',))[0] == key):>3} of "
         f"{sum(1 for v in COUNTRIES.values() if v[0] == key)}"
         for key, name in CONTINENTS)
-    cache = sorted(f for f in os.listdir("/var/cache/geowarden")
-                   if f.startswith("dbip-")) if os.path.isdir("/var/cache/geowarden") else []
+    cache = geo_files()
+    since = stats_since()
     msg(f"Blocking (config):     {'ON' if enabled() else 'OFF'}\n"
         f"Rules loaded:          {'yes' if table_loaded() else 'no'}\n"
-        f"Blocked since load:    {blocked_count()} packets\n"
+        f"Statistics since:      {format_time(since) if since else '-'}\n"
+        f"Requests:              {counter('allowed'):,} allowed, {counter('blocked'):,} blocked\n"
         f"Geo data:              {cache[-1] if cache else '-'}\n"
         f"Filtered interfaces:   {' '.join(wan_ifaces()) or '-'}\n\n"
-        f"Allowed countries: {len(a)}\n{per}", 20, 66)
+        f"Allowed countries: {len(a)}\n{per}", 21, 66)
 
 
 def show_allowed():
@@ -474,6 +495,286 @@ def edit_countries():
         edit_continent(choice, dict(CONTINENTS)[choice])
 
 
+# --- Statistics ---------------------------------------------------------------
+# The rules count every request that reaches the country check, per source address
+# (IPv6 per /64) in the sets STAT_SETS, plus the totals in the counters "allowed"
+# and "blocked". A request is a packet that opens a new connection, so a client
+# that retries a blocked connection is counted once per attempt.
+
+def geo_files():
+    return sorted(f for f in os.listdir(CACHE) if f.startswith("dbip-")) if os.path.isdir(CACHE) else []
+
+
+def format_time(t):
+    mins = int(time.time() - t) // 60
+    if mins < 60:
+        ago = f"{mins} min"
+    elif mins < 48 * 60:
+        ago = f"{mins // 60} h {mins % 60} min"
+    else:
+        ago = f"{mins // 1440} days {mins % 1440 // 60} h"
+    return time.strftime("%Y-%m-%d %H:%M", time.localtime(t)) + f" ({ago} ago)"
+
+
+def stats_since():
+    """Start time of the statistics, None while no statistics are collected."""
+    try:
+        with open(STATS_SINCE) as f:
+            since = int(f.read().strip())
+    except (OSError, ValueError):
+        return None
+    r = subprocess.run(["nft", "list", "set", "inet", "geowarden", STAT_SETS[-1]], capture_output=True)
+    return since if r.returncode == 0 else None
+
+
+def address_hits(setname):
+    """{address: requests} from one of the statistics sets."""
+    r = subprocess.run(["nft", "-j", "list", "set", "inet", "geowarden", setname],
+                       capture_output=True, text=True)
+    hits = {}
+    if r.returncode == 0:
+        for obj in json.loads(r.stdout)["nftables"]:
+            for e in obj.get("set", {}).get("elem", []):
+                e = e.get("elem", e) if isinstance(e, dict) else {"val": e}
+                hits[e["val"]] = e.get("counter", {}).get("packets", 0)
+    return hits
+
+
+_geo = {}
+
+
+def country_of(addr):
+    """Country code (lower case) of an address from the cached DB-IP file, "zz" if unknown."""
+    files = geo_files()
+    if not files:
+        return "zz"
+    if _geo.get("file") != files[-1]:
+        ranges = {4: [], 6: []}
+        with gzip.open(os.path.join(CACHE, files[-1]), "rt") as f:
+            for line in f.read().splitlines():
+                ranges[6 if ":" in line[:line.find(",")] else 4].append(line)
+        starts = {v: [ip_int(l[:l.find(",")]) for l in lines] for v, lines in ranges.items()}
+        _geo.update(file=files[-1], ranges=ranges, starts=starts)
+    n = ip_int(addr)
+    version = 6 if ":" in addr else 4
+    i = bisect.bisect_right(_geo["starts"][version], n) - 1
+    if i >= 0:
+        _, end, cc = _geo["ranges"][version][i].split(",")
+        if ip_int(end) >= n:
+            return cc.lower()
+    return "zz"
+
+
+def ip_int(addr):
+    family = socket.AF_INET6 if ":" in addr else socket.AF_INET
+    return int.from_bytes(socket.inet_pton(family, addr), "big")
+
+
+def collect_stats():
+    """Requests per country {cc: [allowed, blocked]} and per address {"allow"/"block": [(n, addr, cc)]}."""
+    whiptail("--infobox", "Loading statistics ...", "7", "50")
+    countries, addrs = {}, {"allow": [], "block": []}
+    for kind in addrs:
+        for fam in (4, 6):
+            for addr, n in address_hits(f"stat_{kind}{fam}").items():
+                cc = country_of(addr)
+                countries.setdefault(cc, [0, 0])[kind == "block"] += n
+                addrs[kind].append((n, addr, cc))
+    return countries, addrs
+
+
+def country_name(cc):
+    return COUNTRIES.get(cc, ("", "Unknown" if cc == "zz" else cc.upper()))[1]
+
+
+def fg(color):
+    return f"\033[38;5;{color}m"
+
+
+def show_screen(lines):
+    """Shows colored text on the plain terminal until Enter is pressed."""
+    sys.stdout.write("\033[H\033[2J" + "\n".join(lines) + "\n\n  Press Enter to go back ")
+    sys.stdout.flush()
+    try:
+        input()
+    except (EOFError, KeyboardInterrupt):
+        pass
+
+
+def header(title, since):
+    return ["", f"  {BOLD}{title}{RESET}",
+            f"  Since {format_time(since)}",
+            f"  Requests: {fg(GREEN[2])}{counter('allowed'):,} allowed{RESET}, "
+            f"{fg(RED[2])}{counter('blocked'):,} blocked{RESET}", ""]
+
+
+def map_colors(countries, allow):
+    """Color per country: red/green by the kind of requests, brighter = more requests."""
+    top = max((sum(v) for v in countries.values()), default=0)
+    colors = {}
+    for cc in set(COUNTRIES) | set(countries):
+        a, b = countries.get(cc, (0, 0))
+        if a + b:
+            share = math.log1p(a + b) / math.log1p(top)
+            level = 2 if share > 0.8 else 1 if share > 0.55 else 0
+            colors[cc] = (RED if b >= a else GREEN)[level]
+        else:
+            colors[cc] = QUIET_ALLOWED if cc in allow else QUIET_BLOCKED
+    return colors
+
+
+def render_map(countries, colors, width, height):
+    """Scales the world map to width x height pixels, two pixels per character (half blocks)."""
+    with open(WORLDMAP) as f:
+        grid = [[r[i:i + 2].lower() for i in range(0, len(r) - 1, 2)]
+                for r in f.read().splitlines() if not r.startswith("#")]
+    sh, sw = len(grid), len(grid[0])
+    traffic = lambda cc: sum(countries.get(cc, (0, 0)))
+    pix = [[None] * width for _ in range(height)]
+    for y in range(height):
+        y0 = y * sh // height
+        y1 = max(y0 + 1, (y + 1) * sh // height)
+        for x in range(width):
+            x0 = x * sw // width
+            x1 = max(x0 + 1, (x + 1) * sw // width)
+            cells = [grid[j][i] for j in range(y0, y1) for i in range(x0, x1)]
+            land = [c for c in cells if c != ".."]
+            if len(land) * 3 >= len(cells):
+                busy = [c for c in land if traffic(c)]
+                pix[y][x] = max(busy, key=traffic) if busy else max(sorted(set(land)), key=land.count)
+    # Countries with requests stay visible even when they are smaller than a pixel
+    shown = {c for row in pix for c in row}
+    for j, row in enumerate(grid):
+        for i, cc in enumerate(row):
+            if cc != ".." and cc not in shown and traffic(cc):
+                pix[j * height // sh][i * width // sw] = cc
+                shown.add(cc)
+
+    lines = []
+    for y in range(0, height - 1, 2):
+        out, last = [], None
+        for top, bottom in zip(pix[y], pix[y + 1]):
+            t = colors.get(top, QUIET_BLOCKED) if top else None
+            b = colors.get(bottom, QUIET_BLOCKED) if bottom else None
+            if t is None and b is None:
+                style, ch = RESET, " "
+            elif b is None or t == b:
+                style, ch = RESET + fg(t), "█" if t == b else "▀"
+            elif t is None:
+                style, ch = RESET + fg(b), "▄"
+            else:
+                style, ch = fg(t) + f"\033[48;5;{b}m", "▀"
+            if style != last:
+                out.append(style)
+                last = style
+            out.append(ch)
+        lines.append("".join(out) + RESET)
+    return lines
+
+
+def show_map(since):
+    countries, _ = collect_stats()
+    cols, rows = shutil.get_terminal_size()
+    width = min(cols - 4, 200)
+    height = round(width * 78 / 200) // 2 * 2
+    if height // 2 > rows - 11:
+        height = (rows - 11) * 2
+        width = round(height * 200 / 78)
+    if width < 40 or height < 10:
+        msg(f"The terminal is too small for the map ({cols}x{rows}). It needs at least 44x16.", 8, 60)
+        return
+    pad = " " * ((cols - width) // 2)
+    lines = header("Requests by country", since)
+    lines += [pad + l for l in render_map(countries, map_colors(countries, allowed()), width, height)]
+    shade = lambda pal: "".join(fg(c) + "█" for c in pal) + RESET
+    lines += ["", f"  {shade(RED)} blocked requests   {shade(GREEN)} allowed requests   (darker = fewer)",
+              f"  {fg(QUIET_ALLOWED)}█{RESET} allowed country, no requests   "
+              f"{fg(QUIET_BLOCKED)}█{RESET} blocked country, no requests"]
+    on_map = sum(sum(v) for v in countries.values())
+    missing = counter("allowed") + counter("blocked") - on_map
+    if missing > 0:
+        lines.append(f"  {missing:,} requests are only in the totals (address table full)")
+    show_screen(lines)
+
+
+def show_top(since, by_country):
+    countries, addrs = collect_stats()
+    # Countries: rank, name, code, count and a bar; addresses: rank, address, code, count
+    label_width, bar_width = (14, 6) if by_country else (21, 0)
+    width = 3 + label_width + 4 + 7 + (bar_width + 1 if bar_width else 0) + 3
+    cols = {}
+    for kind, color, i in (("allow", GREEN[2], 0), ("block", RED[2], 1)):
+        if by_country:
+            ranked = sorted(((v[i], country_name(cc), cc) for cc, v in countries.items() if v[i]), reverse=True)
+        else:
+            ranked = sorted(addrs[kind], reverse=True)
+        ranked = ranked[:10]
+        top = ranked[0][0] if ranked else 1
+        cols[kind] = []
+        for r, (n, label, cc) in enumerate(ranked):
+            line = f"{r + 1:>2} {label[:label_width]:<{label_width}} {cc.upper():<2} {n:>7,}"
+            if bar_width:
+                line += " " + fg(color) + "▇" * max(1, round(bar_width * n / top)) + RESET
+            cols[kind].append(line)
+    title = "Top 10 countries" if by_country else "Top 10 addresses (IPv6 grouped by /64)"
+    lines = header(title, since)
+    lines.append(f"  {BOLD}{fg(GREEN[2])}{'Allowed':<{width}}{fg(RED[2])}Blocked{RESET}")
+    lines.append("")
+    for r in range(10):
+        left = cols["allow"][r] if r < len(cols["allow"]) else ""
+        right = cols["block"][r] if r < len(cols["block"]) else ""
+        visible = len(re.sub(r"\033\[[0-9;]*m", "", left))
+        lines.append("  " + left + " " * (width - visible) + right)
+    if not cols["allow"] and not cols["block"]:
+        lines.append("  No requests counted yet.")
+    show_screen(lines)
+
+
+def reset_stats():
+    ok, _ = whiptail("--defaultno", "--yesno",
+                     "Delete all statistics and start counting again from now?", "8", "64")
+    if not ok:
+        return
+    r = subprocess.run(["nft", "-f", "-"], capture_output=True, text=True,
+                       input="".join(f"flush set inet geowarden {s}\n" for s in STAT_SETS))
+    for name in ("allowed", "blocked"):
+        subprocess.run(["nft", "reset", "counter", "inet", "geowarden", name], capture_output=True)
+    if r.returncode != 0:
+        msg(f"Reset failed:\n\n{r.stderr.strip()}", 12, 70)
+        return
+    with open(STATS_SINCE + ".tmp", "w") as f:
+        f.write(f"{int(time.time())}\n")
+    os.replace(STATS_SINCE + ".tmp", STATS_SINCE)
+    msg("Statistics reset. Counting starts again now.", 8, 52)
+
+
+def statistics():
+    while True:
+        since = stats_since()
+        if since is None:
+            msg("No statistics available. They are collected while blocking is on "
+                "and the rules are loaded.", 9, 64)
+            return
+        ok, choice = whiptail("--cancel-button", "Back", "--menu",
+                              f"Statistics since {format_time(since)}\n"
+                              f"Requests: {counter('allowed'):,} allowed, {counter('blocked'):,} blocked",
+                              "15", "66", "4",
+                              "1", "World map",
+                              "2", "Top 10 countries",
+                              "3", "Top 10 addresses",
+                              "4", "Reset statistics")
+        if not ok:
+            return
+        if choice == "1":
+            show_map(since)
+        elif choice == "2":
+            show_top(since, True)
+        elif choice == "3":
+            show_top(since, False)
+        else:
+            reset_stats()
+
+
 def main():
     if os.geteuid() != 0:
         sys.exit("geowarden must be run as root.")
@@ -482,14 +783,16 @@ def main():
     while True:
         state = "ON" if enabled() else "OFF"
         ok, choice = whiptail("--cancel-button", "Quit", "--menu",
-                              f"Blocking is {state} - {len(allowed())} countries allowed", "15", "60", "5",
+                              f"Blocking is {state} - {len(allowed())} countries allowed", "16", "60", "5",
                               "1", "Show status",
                               "2", "Turn blocking off" if state == "ON" else "Turn blocking on",
                               "3", "Edit countries (by continent)",
-                              "4", "Show allowed countries")
+                              "4", "Show allowed countries",
+                              "5", "Statistics and world map")
         if not ok:
             return
-        {"1": show_status, "2": toggle_enabled, "3": edit_countries, "4": show_allowed}[choice]()
+        {"1": show_status, "2": toggle_enabled, "3": edit_countries, "4": show_allowed,
+         "5": statistics}[choice]()
 
 
 if __name__ == "__main__":

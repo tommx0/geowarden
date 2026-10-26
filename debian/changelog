@@ -1,3 +1,12 @@
+geowarden (1.2.0) stable; urgency=medium
+
+  * Request statistics: allowed and blocked requests are counted per source
+    address (IPv6 per /64) and kept across the daily reload.
+  * Menu "Statistics and world map": colored world map of requests by
+    country, top 10 countries and addresses, start time, reset.
+
+ -- Thomas Marx <103289949+tommx0@users.noreply.github.com>  Mon, 26 Oct 2026 14:00:00 +0000
+
 geowarden (1.1.0) stable; urgency=medium
 
   * English user interface: menu, messages, country names, configuration

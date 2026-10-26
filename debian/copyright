@@ -24,3 +24,6 @@ License: MIT
 Comment:
  Geolocation data loaded at runtime: "IP Geolocation by DB-IP" (https://db-ip.com),
  licensed under CC BY 4.0. It is not included in this package.
+ .
+ /usr/share/geowarden/worldmap.txt is derived from Natural Earth 1:50m Admin 0
+ Countries (https://www.naturalearthdata.com), which is in the public domain.
