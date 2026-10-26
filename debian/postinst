@@ -1,0 +1,24 @@
+#!/bin/sh
+set -e
+
+if [ "$1" = "configure" ]; then
+	# Keine conffile, da das Menü-Tool die Datei umschreibt
+	[ -e /etc/geowarden.conf ] || install -m 644 /usr/share/geowarden/geowarden.conf /etc/geowarden.conf
+	mkdir -p /var/cache/geowarden
+
+	if [ -d /run/systemd/system ]; then
+		systemctl daemon-reload
+		systemctl enable geowarden.timer >/dev/null 2>&1 || true
+		systemctl start geowarden.timer || true
+		# Nach einem Upgrade die Regeln mit der neuen Version neu laden
+		if grep -q '^ENABLED="yes"' /etc/geowarden.conf; then
+			systemctl start --no-block geowarden.service || true
+		fi
+	fi
+
+	if ! grep -q '^ENABLED="yes"' /etc/geowarden.conf; then
+		echo "geowarden: Die Sperre ist AUS. Einschalten und Länder wählen mit: geowarden"
+	fi
+fi
+
+exit 0

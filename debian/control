@@ -1,0 +1,16 @@
+Package: geowarden
+Version: @VERSION@
+Architecture: all
+Section: net
+Priority: optional
+Maintainer: Thomas Marx <noreply@example.invalid>
+Depends: bash, nftables, curl, whiptail, python3, gzip, iproute2, systemd
+Installed-Size: @SIZE@
+Description: Länder-Allowlist für eingehende Verbindungen per nftables
+ Lässt neue Verbindungen auf den öffentlichen Interfaces nur aus ausgewählten
+ Ländern zu. Die Länderzuordnung kommt aus den Geolokationsdaten von DB-IP
+ Lite und wird täglich per systemd-Timer aktualisiert. Bestehende
+ Verbindungen, VPN-Interfaces und freigegebene Ports sind ausgenommen.
+ .
+ Bedienung über das Menü-Tool "geowarden": Sperre ein-/ausschalten und Länder
+ nach Kontinent auswählen.

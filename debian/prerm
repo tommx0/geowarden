@@ -1,0 +1,12 @@
+#!/bin/sh
+set -e
+
+if [ "$1" = "remove" ]; then
+	if [ -d /run/systemd/system ]; then
+		systemctl disable --now geowarden.timer >/dev/null 2>&1 || true
+	fi
+	# Ohne Paket gäbe es keine Aktualisierung mehr, also Sperre entfernen
+	nft delete table inet geowarden 2>/dev/null || true
+fi
+
+exit 0

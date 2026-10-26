@@ -1,0 +1,9 @@
+[Unit]
+Description=geowarden: Länder-Allowlist per nftables anwenden
+Documentation=file:/usr/share/doc/geowarden/README
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/sbin/geowarden-apply

@@ -1,0 +1,20 @@
+geowarden
+=========
+
+Lässt neue Verbindungen auf den öffentlichen Interfaces nur aus ausgewählten
+Ländern zu (nftables-Tabelle "inet geowarden", Hook prerouting). Bestehende
+Verbindungen, VPN-Interfaces (z. B. Tailscale), Docker-interner Verkehr und die
+in OPEN_TCP/OPEN_UDP eingetragenen Ports sind ausgenommen.
+
+Bedienung:      geowarden                          (Menü, als root)
+Konfiguration:  /etc/geowarden.conf
+Anwenden:       systemctl start geowarden.service  (bzw. /usr/sbin/geowarden-apply)
+Notaus:         nft delete table inet geowarden    (bis zum nächsten Timer-Lauf)
+Aktualisierung: geowarden.timer, beim Start und täglich
+Geodaten:       /var/cache/geowarden, monatlich von DB-IP
+
+Nach der Installation ist die Sperre AUS. Vor dem Einschalten prüfen, dass du
+über ein erlaubtes Land oder ein ungefiltertes Interface (VPN) zugreifst.
+
+Die Länderzuordnung stammt aus "IP Geolocation by DB-IP" (https://db-ip.com),
+lizenziert unter CC BY 4.0.

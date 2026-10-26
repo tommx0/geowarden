@@ -1,0 +1,13 @@
+#!/bin/sh
+set -e
+
+if [ "$1" = "remove" ] && [ -d /run/systemd/system ]; then
+	systemctl daemon-reload || true
+fi
+
+if [ "$1" = "purge" ]; then
+	rm -f /etc/geowarden.conf /etc/geowarden.conf.tmp
+	rm -rf /var/cache/geowarden
+fi
+
+exit 0

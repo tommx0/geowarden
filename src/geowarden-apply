@@ -1,0 +1,92 @@
+#!/bin/bash
+# Lädt IP-Bereiche der erlaubten Länder und setzt die nftables-Tabelle "inet geowarden".
+# Neue Verbindungen auf den öffentlichen Interfaces von anderen Adressen werden verworfen.
+set -euo pipefail
+
+CONF=/etc/geowarden.conf
+[ -r "$CONF" ] || { echo "$CONF fehlt" >&2; exit 1; }
+. "$CONF"
+
+if [ "${ENABLED:-no}" != "yes" ]; then
+	nft delete table inet geowarden 2>/dev/null || true
+	echo "geowarden: Sperre ausgeschaltet"
+	exit 0
+fi
+
+# Ohne WAN_IF: Interfaces der Default-Routen (IPv4 und IPv6)
+if [ -z "${WAN_IF:-}" ]; then
+	WAN_IF=$( { ip -4 -o route show default; ip -6 -o route show default; } \
+		| grep -o 'dev [^ ]*' | cut -d' ' -f2 | sort -u | tr '\n' ' ')
+fi
+WAN_IF=$(echo $WAN_IF)
+[ -n "$WAN_IF" ] || { echo "Kein öffentliches Interface gefunden - bitte WAN_IF in $CONF setzen" >&2; exit 1; }
+
+# Geolokations-Daten: "IP Geolocation by DB-IP" (https://db-ip.com), Lizenz CC BY 4.0.
+# Erscheint monatlich; Anfang des Monats ggf. noch nicht da, dann Vormonat.
+SRC="https://download.db-ip.com/free/dbip-country-lite"
+CACHE=/var/cache/geowarden
+WORK=$(mktemp -d)
+trap 'rm -rf "$WORK"' EXIT
+mkdir -p "$CACHE"
+
+DB=""
+for m in "$(date +%Y-%m)" "$(date -d '-1 month' +%Y-%m)"; do
+	if [ -s "$CACHE/dbip-$m.csv.gz" ]; then DB="$CACHE/dbip-$m.csv.gz"; break; fi
+	if curl -fsS --retry 3 --max-time 300 "$SRC-$m.csv.gz" -o "$WORK/dl.csv.gz" \
+		&& gzip -t "$WORK/dl.csv.gz" \
+		&& [ "$(zcat "$WORK/dl.csv.gz" | wc -l)" -gt 100000 ]; then
+		mv "$WORK/dl.csv.gz" "$CACHE/dbip-$m.csv.gz"
+		DB="$CACHE/dbip-$m.csv.gz"
+		find "$CACHE" -name 'dbip-*.csv.gz' ! -name "dbip-$m.csv.gz" -delete
+		break
+	fi
+done
+[ -n "$DB" ] || { echo "Download fehlgeschlagen - Regeln bleiben unverändert" >&2; exit 1; }
+
+# CSV-Zeilen: start,end,LAND -> nft-Bereich "start-end" (Einzeladresse ohne "-",
+# ältere nft-Versionen lehnen "a-a" ab)
+: > "$WORK/all4"; : > "$WORK/all6"
+zcat "$DB" | awk -F, -v list="${COUNTRIES^^}" -v out="$WORK/all" '
+	BEGIN { n = split(list, c, " "); for (i = 1; i <= n; i++) ok[c[i]] = 1 }
+	ok[$3] { print ($1 == $2 ? $1 : $1 "-" $2) > (out (index($1, ":") ? "6" : "4")) }'
+
+n4=$(wc -l < "$WORK/all4"); n6=$(wc -l < "$WORK/all6")
+if [ -n "${COUNTRIES// /}" ] && [ $((n4 + n6)) -eq 0 ]; then
+	echo "Keine IP-Bereiche für die gewählten Länder gefunden - Regeln bleiben unverändert" >&2
+	exit 1
+fi
+
+elements() { [ -s "$1" ] && { echo " elements = {"; paste -sd, "$1"; echo " }"; }; true; }
+quoted() { local out="" i; for i in $1; do out+="${out:+, }\"$i\""; done; echo "$out"; }
+
+{
+	echo "add table inet geowarden"
+	echo "delete table inet geowarden"
+	echo "table inet geowarden {"
+	echo "  set allow4 { type ipv4_addr; flags interval; auto-merge;"
+	elements "$WORK/all4"
+	echo "  }"
+	echo "  set allow6 { type ipv6_addr; flags interval; auto-merge;"
+	elements "$WORK/all6"
+	echo "  }"
+	echo "  counter blocked { }"
+	echo "  chain prerouting {"
+	# priority -150: nach conntrack (-200), vor DNAT z. B. von Docker (-100)
+	echo "    type filter hook prerouting priority -150; policy accept;"
+	echo "    iifname != { $(quoted "$WAN_IF") } accept"
+	echo "    ct state established,related accept"
+	[ -n "${OPEN_TCP// /}" ] && echo "    tcp dport { ${OPEN_TCP// /, } } accept"
+	[ -n "${OPEN_UDP// /}" ] && echo "    udp dport { ${OPEN_UDP// /, } } accept"
+	echo "    udp sport 67 udp dport 68 accept"
+	echo "    ip6 saddr fe80::/10 accept"
+	echo "    icmpv6 type { nd-neighbor-solicit, nd-neighbor-advert, nd-router-advert } accept"
+	echo "    ip saddr @allow4 accept"
+	echo "    ip6 saddr @allow6 accept"
+	echo "    counter name blocked drop"
+	echo "  }"
+	echo "}"
+} > "$WORK/geowarden.nft"
+
+nft -c -f "$WORK/geowarden.nft"
+nft -f "$WORK/geowarden.nft"
+echo "geowarden: $n4 IPv4- und $n6 IPv6-Bereiche geladen ($(wc -w <<< "$COUNTRIES") Länder, Interface: $WAN_IF)"
