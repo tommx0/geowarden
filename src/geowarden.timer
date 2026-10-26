@@ -1,5 +1,5 @@
 [Unit]
-Description=geowarden: Regeln beim Start und täglich neu laden
+Description=geowarden: reload rules at boot and daily
 
 [Timer]
 OnBootSec=1min

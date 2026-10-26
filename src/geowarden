@@ -1,8 +1,8 @@
 #!/usr/bin/python3 -I
-"""geowarden - Menü für die Geo-Sperre (nftables-Tabelle "inet geowarden").
+"""geowarden - menu for the country allowlist (nftables table "inet geowarden").
 
-Liest und schreibt /etc/geowarden.conf und wendet Änderungen sofort
-über /usr/sbin/geowarden-apply an.
+Reads and writes /etc/geowarden.conf and applies changes immediately
+via /usr/sbin/geowarden-apply.
 """
 import os
 import re
@@ -12,270 +12,270 @@ import unicodedata
 
 CONF = "/etc/geowarden.conf"
 APPLY = "/usr/sbin/geowarden-apply"
-TITLE = "Geo-Sperre"
+TITLE = "geowarden"
 
 CONTINENTS = [
-    ("EU", "Europa"),
-    ("NA", "Nord- und Mittelamerika, Karibik"),
-    ("SA", "Südamerika"),
-    ("AS", "Asien"),
-    ("AF", "Afrika"),
-    ("OC", "Ozeanien"),
-    ("AN", "Antarktis und Inseln"),
+    ("EU", "Europe"),
+    ("NA", "North and Central America, Caribbean"),
+    ("SA", "South America"),
+    ("AS", "Asia"),
+    ("AF", "Africa"),
+    ("OC", "Oceania"),
+    ("AN", "Antarctica and islands"),
 ]
 
-# Code Kontinent Name
+# Code Continent Name
 COUNTRY_TABLE = """
 AD EU Andorra
-AL EU Albanien
-AT EU Österreich
-AX EU Åland
-BA EU Bosnien und Herzegowina
-BE EU Belgien
-BG EU Bulgarien
+AL EU Albania
+AT EU Austria
+AX EU Åland Islands
+BA EU Bosnia and Herzegovina
+BE EU Belgium
+BG EU Bulgaria
 BY EU Belarus
-CH EU Schweiz
-CY EU Zypern
-CZ EU Tschechien
-DE EU Deutschland
-DK EU Dänemark
-EE EU Estland
-ES EU Spanien
-FI EU Finnland
-FO EU Färöer
-FR EU Frankreich
-GB EU Vereinigtes Königreich
+CH EU Switzerland
+CY EU Cyprus
+CZ EU Czechia
+DE EU Germany
+DK EU Denmark
+EE EU Estonia
+ES EU Spain
+FI EU Finland
+FO EU Faroe Islands
+FR EU France
+GB EU United Kingdom
 GG EU Guernsey
 GI EU Gibraltar
-GR EU Griechenland
-HR EU Kroatien
-HU EU Ungarn
-IE EU Irland
+GR EU Greece
+HR EU Croatia
+HU EU Hungary
+IE EU Ireland
 IM EU Isle of Man
-IS EU Island
-IT EU Italien
+IS EU Iceland
+IT EU Italy
 JE EU Jersey
 LI EU Liechtenstein
-LT EU Litauen
-LU EU Luxemburg
-LV EU Lettland
+LT EU Lithuania
+LU EU Luxembourg
+LV EU Latvia
 MC EU Monaco
-MD EU Moldau
+MD EU Moldova
 ME EU Montenegro
-MK EU Nordmazedonien
+MK EU North Macedonia
 MT EU Malta
-NL EU Niederlande
-NO EU Norwegen
-PL EU Polen
+NL EU Netherlands
+NO EU Norway
+PL EU Poland
 PT EU Portugal
-RO EU Rumänien
-RS EU Serbien
-RU EU Russland
-SE EU Schweden
-SI EU Slowenien
-SJ EU Svalbard und Jan Mayen
-SK EU Slowakei
+RO EU Romania
+RS EU Serbia
+RU EU Russia
+SE EU Sweden
+SI EU Slovenia
+SJ EU Svalbard and Jan Mayen
+SK EU Slovakia
 SM EU San Marino
 UA EU Ukraine
-VA EU Vatikanstadt
+VA EU Vatican City
 XK EU Kosovo
-AG NA Antigua und Barbuda
+AG NA Antigua and Barbuda
 AI NA Anguilla
 AW NA Aruba
 BB NA Barbados
-BL NA St. Barthélemy
+BL NA Saint Barthélemy
 BM NA Bermuda
-BQ NA Karibische Niederlande
+BQ NA Caribbean Netherlands
 BS NA Bahamas
 BZ NA Belize
-CA NA Kanada
+CA NA Canada
 CR NA Costa Rica
-CU NA Kuba
+CU NA Cuba
 CW NA Curaçao
 DM NA Dominica
-DO NA Dominikanische Republik
+DO NA Dominican Republic
 GD NA Grenada
-GL NA Grönland
+GL NA Greenland
 GP NA Guadeloupe
 GT NA Guatemala
 HN NA Honduras
 HT NA Haiti
-JM NA Jamaika
-KN NA St. Kitts und Nevis
-KY NA Kaimaninseln
-LC NA St. Lucia
-MF NA St. Martin
+JM NA Jamaica
+KN NA Saint Kitts and Nevis
+KY NA Cayman Islands
+LC NA Saint Lucia
+MF NA Saint Martin
 MQ NA Martinique
 MS NA Montserrat
-MX NA Mexiko
+MX NA Mexico
 NI NA Nicaragua
 PA NA Panama
-PM NA St. Pierre und Miquelon
+PM NA Saint Pierre and Miquelon
 PR NA Puerto Rico
 SV NA El Salvador
 SX NA Sint Maarten
-TC NA Turks- und Caicosinseln
-TT NA Trinidad und Tobago
-US NA USA
-VC NA St. Vincent und die Grenadinen
-VG NA Britische Jungferninseln
-VI NA Amerikanische Jungferninseln
-AR SA Argentinien
-BO SA Bolivien
-BR SA Brasilien
+TC NA Turks and Caicos Islands
+TT NA Trinidad and Tobago
+US NA United States
+VC NA Saint Vincent and the Grenadines
+VG NA British Virgin Islands
+VI NA U.S. Virgin Islands
+AR SA Argentina
+BO SA Bolivia
+BR SA Brazil
 CL SA Chile
-CO SA Kolumbien
+CO SA Colombia
 EC SA Ecuador
-FK SA Falklandinseln
-GF SA Französisch-Guayana
+FK SA Falkland Islands
+GF SA French Guiana
 GY SA Guyana
 PE SA Peru
 PY SA Paraguay
 SR SA Suriname
 UY SA Uruguay
 VE SA Venezuela
-AE AS Vereinigte Arabische Emirate
+AE AS United Arab Emirates
 AF AS Afghanistan
-AM AS Armenien
-AZ AS Aserbaidschan
-BD AS Bangladesch
+AM AS Armenia
+AZ AS Azerbaijan
+BD AS Bangladesh
 BH AS Bahrain
 BN AS Brunei
 BT AS Bhutan
 CN AS China
-GE AS Georgien
-HK AS Hongkong
-ID AS Indonesien
+GE AS Georgia
+HK AS Hong Kong
+ID AS Indonesia
 IL AS Israel
-IN AS Indien
-IQ AS Irak
+IN AS India
+IQ AS Iraq
 IR AS Iran
-JO AS Jordanien
+JO AS Jordan
 JP AS Japan
-KG AS Kirgisistan
-KH AS Kambodscha
-KP AS Nordkorea
-KR AS Südkorea
+KG AS Kyrgyzstan
+KH AS Cambodia
+KP AS North Korea
+KR AS South Korea
 KW AS Kuwait
-KZ AS Kasachstan
+KZ AS Kazakhstan
 LA AS Laos
-LB AS Libanon
+LB AS Lebanon
 LK AS Sri Lanka
 MM AS Myanmar
-MN AS Mongolei
-MO AS Macau
-MV AS Malediven
+MN AS Mongolia
+MO AS Macao
+MV AS Maldives
 MY AS Malaysia
 NP AS Nepal
 OM AS Oman
-PH AS Philippinen
+PH AS Philippines
 PK AS Pakistan
-PS AS Palästina
-QA AS Katar
-SA AS Saudi-Arabien
-SG AS Singapur
-SY AS Syrien
+PS AS Palestine
+QA AS Qatar
+SA AS Saudi Arabia
+SG AS Singapore
+SY AS Syria
 TH AS Thailand
-TJ AS Tadschikistan
-TL AS Osttimor
+TJ AS Tajikistan
+TL AS Timor-Leste
 TM AS Turkmenistan
-TR AS Türkei
+TR AS Türkiye
 TW AS Taiwan
-UZ AS Usbekistan
+UZ AS Uzbekistan
 VN AS Vietnam
-YE AS Jemen
+YE AS Yemen
 AO AF Angola
 BF AF Burkina Faso
 BI AF Burundi
 BJ AF Benin
-BW AF Botsuana
-CD AF Kongo (Dem. Republik)
-CF AF Zentralafrikanische Republik
-CG AF Kongo (Republik)
-CI AF Elfenbeinküste
-CM AF Kamerun
-CV AF Kap Verde
-DJ AF Dschibuti
-DZ AF Algerien
-EG AF Ägypten
-EH AF Westsahara
+BW AF Botswana
+CD AF Congo (DR)
+CF AF Central African Republic
+CG AF Congo (Republic)
+CI AF Côte d'Ivoire
+CM AF Cameroon
+CV AF Cabo Verde
+DJ AF Djibouti
+DZ AF Algeria
+EG AF Egypt
+EH AF Western Sahara
 ER AF Eritrea
-ET AF Äthiopien
-GA AF Gabun
+ET AF Ethiopia
+GA AF Gabon
 GH AF Ghana
 GM AF Gambia
 GN AF Guinea
-GQ AF Äquatorialguinea
+GQ AF Equatorial Guinea
 GW AF Guinea-Bissau
-IO AF Britisches Territorium im Indischen Ozean
-KE AF Kenia
-KM AF Komoren
+IO AF British Indian Ocean Territory
+KE AF Kenya
+KM AF Comoros
 LR AF Liberia
 LS AF Lesotho
-LY AF Libyen
-MA AF Marokko
-MG AF Madagaskar
+LY AF Libya
+MA AF Morocco
+MG AF Madagascar
 ML AF Mali
-MR AF Mauretanien
+MR AF Mauritania
 MU AF Mauritius
 MW AF Malawi
-MZ AF Mosambik
+MZ AF Mozambique
 NA AF Namibia
 NE AF Niger
 NG AF Nigeria
 RE AF Réunion
-RW AF Ruanda
-SC AF Seychellen
+RW AF Rwanda
+SC AF Seychelles
 SD AF Sudan
-SH AF St. Helena
+SH AF Saint Helena
 SL AF Sierra Leone
 SN AF Senegal
 SO AF Somalia
-SS AF Südsudan
-ST AF São Tomé und Príncipe
+SS AF South Sudan
+ST AF São Tomé and Príncipe
 SZ AF Eswatini
-TD AF Tschad
+TD AF Chad
 TG AF Togo
-TN AF Tunesien
-TZ AF Tansania
+TN AF Tunisia
+TZ AF Tanzania
 UG AF Uganda
 YT AF Mayotte
-ZA AF Südafrika
-ZM AF Sambia
-ZW AF Simbabwe
-AS OC Amerikanisch-Samoa
-AU OC Australien
-CC OC Kokosinseln
-CK OC Cookinseln
-CX OC Weihnachtsinsel
-FJ OC Fidschi
-FM OC Mikronesien
+ZA AF South Africa
+ZM AF Zambia
+ZW AF Zimbabwe
+AS OC American Samoa
+AU OC Australia
+CC OC Cocos (Keeling) Islands
+CK OC Cook Islands
+CX OC Christmas Island
+FJ OC Fiji
+FM OC Micronesia
 GU OC Guam
 KI OC Kiribati
-MH OC Marshallinseln
-MP OC Nördliche Marianen
-NC OC Neukaledonien
-NF OC Norfolkinsel
+MH OC Marshall Islands
+MP OC Northern Mariana Islands
+NC OC New Caledonia
+NF OC Norfolk Island
 NR OC Nauru
 NU OC Niue
-NZ OC Neuseeland
-PF OC Französisch-Polynesien
-PG OC Papua-Neuguinea
-PN OC Pitcairninseln
+NZ OC New Zealand
+PF OC French Polynesia
+PG OC Papua New Guinea
+PN OC Pitcairn Islands
 PW OC Palau
-SB OC Salomonen
+SB OC Solomon Islands
 TK OC Tokelau
 TO OC Tonga
 TV OC Tuvalu
-UM OC Amerikanische Überseeinseln
+UM OC U.S. Outlying Islands
 VU OC Vanuatu
-WF OC Wallis und Futuna
+WF OC Wallis and Futuna
 WS OC Samoa
-AQ AN Antarktis
-BV AN Bouvetinsel
-GS AN Südgeorgien und Südliche Sandwichinseln
-HM AN Heard und McDonaldinseln
-TF AN Französische Süd- und Antarktisgebiete
+AQ AN Antarctica
+BV AN Bouvet Island
+GS AN South Georgia and the South Sandwich Islands
+HM AN Heard and McDonald Islands
+TF AN French Southern Territories
 """
 
 COUNTRIES = {}  # code -> (continent, name)
@@ -285,12 +285,12 @@ for line in COUNTRY_TABLE.strip().splitlines():
 
 
 def sortkey(name):
-    """Sortiert Ä wie A usw."""
+    """Sorts Å like A etc."""
     return unicodedata.normalize("NFD", name).encode("ascii", "ignore").decode().lower()
 
 
 def whiptail(*args):
-    """Startet whiptail; gibt (ok, Auswahl) zurück."""
+    """Runs whiptail; returns (ok, selection)."""
     r = subprocess.run(["whiptail", "--title", TITLE, *args], stderr=subprocess.PIPE, text=True)
     return r.returncode == 0, r.stderr.strip()
 
@@ -338,7 +338,7 @@ def blocked_count():
 
 
 def wan_ifaces():
-    """Gefilterte Interfaces: WAN_IF aus der Konfiguration, sonst die der Default-Routen."""
+    """Filtered interfaces: WAN_IF from the config, otherwise those of the default routes."""
     conf = read_conf()[1].get("WAN_IF", "").split()
     if conf:
         return conf
@@ -351,7 +351,7 @@ def wan_ifaces():
 
 
 def ssh_warning():
-    """Warnt, wenn die eigene SSH-Verbindung über das öffentliche Interface käme und nicht erlaubt ist."""
+    """Warns if our own SSH connection comes in via a public interface and is not allowed."""
     client = os.environ.get("SSH_CLIENT", "").split(" ")[0]
     if not client or not table_loaded():
         return ""
@@ -362,17 +362,17 @@ def ssh_warning():
     r = subprocess.run(["nft", "get", "element", "inet", "geowarden", setname, f"{{ {client} }}"],
                        capture_output=True)
     if r.returncode != 0:
-        return (f"\n\nACHTUNG: Deine SSH-Adresse {client} ist nicht erlaubt. Die laufende "
-                "Verbindung bleibt bestehen, eine neue wird blockiert!")
+        return (f"\n\nWARNING: Your SSH address {client} is not allowed. The current "
+                "connection stays open, but a new one will be blocked!")
     return ""
 
 
 def apply():
-    whiptail("--infobox", "Regeln werden angewendet ...", "7", "50")
+    whiptail("--infobox", "Applying rules ...", "7", "50")
     r = subprocess.run([APPLY], capture_output=True, text=True)
     out = (r.stdout + r.stderr).strip()
     if r.returncode != 0:
-        msg(f"Fehler beim Anwenden, die alten Regeln bleiben aktiv:\n\n{out}", 14, 76)
+        msg(f"Applying failed, the previous rules stay active:\n\n{out}", 14, 76)
     else:
         msg(out + ssh_warning(), 12, 76)
 
@@ -380,8 +380,8 @@ def apply():
 def set_countries(codes):
     if not codes and enabled():
         ok, _ = whiptail("--defaultno", "--yesno",
-                         "Kein Land mehr erlaubt: Der Server wäre dann (außer Port 80 und "
-                         "Tailscale) von überall gesperrt.\n\nTrotzdem speichern?", "11", "70")
+                         "No country allowed: the server would then be blocked from everywhere "
+                         "(except port 80 and Tailscale).\n\nSave anyway?", "11", "70")
         if not ok:
             return
     write_conf("COUNTRIES", " ".join(sorted(codes)))
@@ -392,17 +392,17 @@ def set_countries(codes):
 def show_status():
     a = allowed()
     per = "\n".join(
-        f"  {name:<34} {sum(1 for c in a if COUNTRIES.get(c, ('',))[0] == key):>3} von "
+        f"  {name:<38} {sum(1 for c in a if COUNTRIES.get(c, ('',))[0] == key):>3} of "
         f"{sum(1 for v in COUNTRIES.values() if v[0] == key)}"
         for key, name in CONTINENTS)
     cache = sorted(f for f in os.listdir("/var/cache/geowarden")
                    if f.startswith("dbip-")) if os.path.isdir("/var/cache/geowarden") else []
-    msg(f"Sperre (Konfiguration): {'AN' if enabled() else 'AUS'}\n"
-        f"Regeln geladen:         {'ja' if table_loaded() else 'nein'}\n"
-        f"Blockiert seit Laden:   {blocked_count()} Pakete\n"
-        f"Geodaten:               {cache[-1] if cache else '-'}\n"
-        f"Gefilterte Interfaces:  {' '.join(wan_ifaces()) or '-'}\n\n"
-        f"Erlaubte Länder: {len(a)}\n{per}", 20, 66)
+    msg(f"Blocking (config):     {'ON' if enabled() else 'OFF'}\n"
+        f"Rules loaded:          {'yes' if table_loaded() else 'no'}\n"
+        f"Blocked since load:    {blocked_count()} packets\n"
+        f"Geo data:              {cache[-1] if cache else '-'}\n"
+        f"Filtered interfaces:   {' '.join(wan_ifaces()) or '-'}\n\n"
+        f"Allowed countries: {len(a)}\n{per}", 20, 66)
 
 
 def show_allowed():
@@ -414,14 +414,14 @@ def show_allowed():
             lines.append(f"{cname}:\n  " + ", ".join(names))
     unknown = sorted(c.upper() for c in a if c not in COUNTRIES)
     if unknown:
-        lines.append("Unbekannte Codes: " + ", ".join(unknown))
-    msg("\n\n".join(lines) or "Kein Land erlaubt.", 22, 76)
+        lines.append("Unknown codes: " + ", ".join(unknown))
+    msg("\n\n".join(lines) or "No country allowed.", 22, 76)
 
 
 def toggle_enabled():
     if enabled():
         ok, _ = whiptail("--defaultno", "--yesno",
-                         "Sperre ausschalten? Danach ist der Server wieder aus allen Ländern erreichbar.",
+                         "Turn blocking off? The server will then be reachable from all countries again.",
                          "9", "64")
         if ok:
             write_conf("ENABLED", "no")
@@ -435,9 +435,9 @@ def edit_continent(key, cname):
     codes = sorted((c for c, v in COUNTRIES.items() if v[0] == key), key=lambda c: sortkey(COUNTRIES[c][1]))
     a = allowed()
     ok, choice = whiptail("--menu", cname, "13", "60", "3",
-                          "1", "Länder einzeln auswählen",
-                          "2", "Alle erlauben",
-                          "3", "Alle sperren")
+                          "1", "Select countries individually",
+                          "2", "Allow all",
+                          "3", "Block all")
     if not ok:
         return
     if choice == "2":
@@ -449,7 +449,7 @@ def edit_continent(key, cname):
         for c in codes:
             items += [c.upper(), COUNTRIES[c][1], "ON" if c in a else "OFF"]
         ok, sel = whiptail("--separate-output", "--checklist",
-                           f"{cname}: Leertaste = an/aus, Enter = speichern",
+                           f"{cname}: Space = on/off, Enter = save",
                            "22", "64", "14", *items)
         if not ok:
             return
@@ -466,9 +466,9 @@ def edit_countries():
         for key, cname in CONTINENTS:
             total = sum(1 for v in COUNTRIES.values() if v[0] == key)
             n = sum(1 for c in a if COUNTRIES.get(c, ("",))[0] == key)
-            items += [key, f"{cname}  ({n}/{total} erlaubt)"]
-        ok, choice = whiptail("--cancel-button", "Zurück", "--menu",
-                              "Kontinent wählen:", "16", "64", str(len(CONTINENTS)), *items)
+            items += [key, f"{cname}  ({n}/{total} allowed)"]
+        ok, choice = whiptail("--cancel-button", "Back", "--menu",
+                              "Choose a continent:", "16", "64", str(len(CONTINENTS)), *items)
         if not ok:
             return
         edit_continent(choice, dict(CONTINENTS)[choice])
@@ -476,17 +476,17 @@ def edit_countries():
 
 def main():
     if os.geteuid() != 0:
-        sys.exit("geowarden muss als root laufen.")
+        sys.exit("geowarden must be run as root.")
     if len(sys.argv) > 1:
-        sys.exit("Aufruf ohne Argumente: geowarden")
+        sys.exit("Usage: geowarden (no arguments)")
     while True:
-        state = "AN" if enabled() else "AUS"
-        ok, choice = whiptail("--cancel-button", "Beenden", "--menu",
-                              f"Sperre ist {state} - {len(allowed())} Länder erlaubt", "15", "60", "5",
-                              "1", "Status anzeigen",
-                              "2", "Sperre ausschalten" if state == "AN" else "Sperre einschalten",
-                              "3", "Länder bearbeiten (nach Kontinent)",
-                              "4", "Erlaubte Länder anzeigen")
+        state = "ON" if enabled() else "OFF"
+        ok, choice = whiptail("--cancel-button", "Quit", "--menu",
+                              f"Blocking is {state} - {len(allowed())} countries allowed", "15", "60", "5",
+                              "1", "Show status",
+                              "2", "Turn blocking off" if state == "ON" else "Turn blocking on",
+                              "3", "Edit countries (by continent)",
+                              "4", "Show allowed countries")
         if not ok:
             return
         {"1": show_status, "2": toggle_enabled, "3": edit_countries, "4": show_allowed}[choice]()

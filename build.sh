@@ -1,5 +1,5 @@
 #!/bin/bash
-# Baut dist/geowarden_<version>_all.deb. Version: erste Zeile von debian/changelog.
+# Builds dist/geowarden_<version>_all.deb. Version: first line of debian/changelog.
 set -euo pipefail
 cd "$(dirname "$0")"
 

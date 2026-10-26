@@ -1,3 +1,10 @@
+geowarden (1.1.0) stable; urgency=medium
+
+  * English user interface: menu, messages, country names, configuration
+    comments and package description.
+
+ -- Thomas Marx <103289949+tommx0@users.noreply.github.com>  Mon, 26 Oct 2026 12:00:00 +0000
+
 geowarden (1.0.0) stable; urgency=medium
 
   * Erste Paketversion: Menü-Tool, nftables-Allowlist mit DB-IP-Geodaten,

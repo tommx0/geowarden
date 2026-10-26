@@ -6,11 +6,11 @@ Priority: optional
 Maintainer: Thomas Marx <103289949+tommx0@users.noreply.github.com>
 Depends: bash, nftables, curl, whiptail, python3, gzip, iproute2, systemd
 Installed-Size: @SIZE@
-Description: Länder-Allowlist für eingehende Verbindungen per nftables
- Lässt neue Verbindungen auf den öffentlichen Interfaces nur aus ausgewählten
- Ländern zu. Die Länderzuordnung kommt aus den Geolokationsdaten von DB-IP
- Lite und wird täglich per systemd-Timer aktualisiert. Bestehende
- Verbindungen, VPN-Interfaces und freigegebene Ports sind ausgenommen.
+Description: country allowlist for incoming connections via nftables
+ Accepts new connections on the public interfaces only from selected
+ countries. Country data comes from the DB-IP Lite geolocation database and
+ is refreshed daily by a systemd timer. Established connections, VPN
+ interfaces and open ports are exempt.
  .
- Bedienung über das Menü-Tool "geowarden": Sperre ein-/ausschalten und Länder
- nach Kontinent auswählen.
+ Managed with the menu tool "geowarden": turn blocking on/off and choose
+ countries by continent.

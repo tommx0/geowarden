@@ -22,5 +22,5 @@ License: MIT
  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  SOFTWARE.
 Comment:
- Zur Laufzeit geladene Geodaten: "IP Geolocation by DB-IP" (https://db-ip.com),
- lizenziert unter CC BY 4.0. Sie sind nicht im Paket enthalten.
+ Geolocation data loaded at runtime: "IP Geolocation by DB-IP" (https://db-ip.com),
+ licensed under CC BY 4.0. It is not included in this package.

@@ -1,5 +1,5 @@
 [Unit]
-Description=geowarden: Länder-Allowlist per nftables anwenden
+Description=geowarden: apply the country allowlist via nftables
 Documentation=file:/usr/share/doc/geowarden/README
 Wants=network-online.target
 After=network-online.target

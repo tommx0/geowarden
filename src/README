@@ -1,20 +1,20 @@
 geowarden
 =========
 
-Lässt neue Verbindungen auf den öffentlichen Interfaces nur aus ausgewählten
-Ländern zu (nftables-Tabelle "inet geowarden", Hook prerouting). Bestehende
-Verbindungen, VPN-Interfaces (z. B. Tailscale), Docker-interner Verkehr und die
-in OPEN_TCP/OPEN_UDP eingetragenen Ports sind ausgenommen.
+Accepts new connections on the public interfaces only from selected countries
+(nftables table "inet geowarden", hook prerouting). Established connections,
+VPN interfaces (e.g. Tailscale), Docker-internal traffic and the ports listed
+in OPEN_TCP/OPEN_UDP are exempt.
 
-Bedienung:      geowarden                          (Menü, als root)
-Konfiguration:  /etc/geowarden.conf
-Anwenden:       systemctl start geowarden.service  (bzw. /usr/sbin/geowarden-apply)
-Notaus:         nft delete table inet geowarden    (bis zum nächsten Timer-Lauf)
-Aktualisierung: geowarden.timer, beim Start und täglich
-Geodaten:       /var/cache/geowarden, monatlich von DB-IP
+Menu:           geowarden                          (as root)
+Configuration:  /etc/geowarden.conf
+Apply:          systemctl start geowarden.service  (or /usr/sbin/geowarden-apply)
+Kill switch:    nft delete table inet geowarden    (until the next timer run)
+Updates:        geowarden.timer, at boot and daily
+Geo data:       /var/cache/geowarden, monthly from DB-IP
 
-Nach der Installation ist die Sperre AUS. Vor dem Einschalten prüfen, dass du
-über ein erlaubtes Land oder ein ungefiltertes Interface (VPN) zugreifst.
+Blocking is OFF after installation. Before turning it on, make sure you are
+connecting from an allowed country or via an unfiltered interface (VPN).
 
-Die Länderzuordnung stammt aus "IP Geolocation by DB-IP" (https://db-ip.com),
-lizenziert unter CC BY 4.0.
+Country data: "IP Geolocation by DB-IP" (https://db-ip.com), licensed under
+CC BY 4.0.

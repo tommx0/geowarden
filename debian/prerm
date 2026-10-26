@@ -5,7 +5,7 @@ if [ "$1" = "remove" ]; then
 	if [ -d /run/systemd/system ]; then
 		systemctl disable --now geowarden.timer >/dev/null 2>&1 || true
 	fi
-	# Ohne Paket gäbe es keine Aktualisierung mehr, also Sperre entfernen
+	# Without the package there are no more updates, so remove the block
 	nft delete table inet geowarden 2>/dev/null || true
 fi
 
