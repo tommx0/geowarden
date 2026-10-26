@@ -80,27 +80,29 @@ The package pulls in its dependencies automatically: `nftables`, `curl`, `whipta
 
 ## Installation
 
-### 1. Build the package
+### 1. Install the package
 
-geowarden ships as a small Debian package. Build it on the server (or any Debian/Ubuntu machine):
+Download the Debian package from the [latest release](https://github.com/tommx0/geowarden/releases/latest) and install it:
+
+```bash
+curl -LO https://github.com/tommx0/geowarden/releases/download/v1.3.0/geowarden_1.3.0_all.deb
+sudo apt install ./geowarden_1.3.0_all.deb
+```
+
+This installs the menu tool, the systemd service and the timer. The timer is enabled right away. **Blocking stays off** until you turn it on.
+
+### Alternative: build it yourself
+
+To build the package from source on any Debian or Ubuntu machine:
 
 ```bash
 git clone https://github.com/tommx0/geowarden.git
 cd geowarden
 ./build.sh
-```
-
-The package is written to `dist/geowarden_<version>_all.deb`.
-
-### 2. Install it
-
-```bash
 sudo apt install ./dist/geowarden_*_all.deb
 ```
 
-This installs the menu tool, the systemd service and the timer. The timer is enabled right away. **Blocking stays off** until you turn it on.
-
-### 3. Turn it on
+### 2. Turn it on
 
 > [!IMPORTANT]
 > Before you turn blocking on, make sure you reach the server from an allowed country or over an unfiltered interface such as a VPN.
