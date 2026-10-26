@@ -2,6 +2,10 @@
 
 Thanks for your interest! Bug reports, ideas and pull requests are welcome.
 
+## Questions
+
+Ask in [Discussions](https://github.com/tommx0/geowarden/discussions).
+
 ## Reporting bugs and ideas
 
 Open an [issue](https://github.com/tommx0/geowarden/issues/new/choose). For bugs, the template asks for the

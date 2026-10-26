@@ -3,3 +3,6 @@ contact_links:
   - name: Report a security problem
     url: https://github.com/tommx0/geowarden/security/advisories/new
     about: Please report vulnerabilities privately, not as a public issue.
+  - name: Ask a question
+    url: https://github.com/tommx0/geowarden/discussions
+    about: Questions about setup and usage are best asked in Discussions.
