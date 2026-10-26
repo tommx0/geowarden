@@ -17,5 +17,8 @@ Geo data:       /var/cache/geowarden, monthly from DB-IP
 Blocking is OFF after installation. Before turning it on, make sure you are
 connecting from an allowed country or via an unfiltered interface (VPN).
 
+geowarden is provided as is, without any warranty. Use it at your own risk;
+the author accepts no liability for any consequences of its use.
+
 Country data: "IP Geolocation by DB-IP" (https://db-ip.com), licensed under
 CC BY 4.0. World map: Natural Earth (https://www.naturalearthdata.com), public domain.

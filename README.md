@@ -214,9 +214,16 @@ sudo apt purge geowarden    # also deletes /etc/geowarden.conf and the geo data 
 - **Let's Encrypt** validates HTTP-01 challenges from servers worldwide. Keep port 80 in `OPEN_TCP` if you use it, or switch to DNS-01.
 - **EU geo-blocking rules.** If you sell goods or services in the EU, note Regulation (EU) 2018/302: customers from other EU countries must not be blocked without an objective reason.
 
+## Disclaimer
+
+geowarden is provided **as is, without any warranty**. Use it at your own risk.
+It changes your server's firewall: a wrong setting can lock you out or let unwanted traffic in.
+Geolocation data can be wrong or out of date. The author accepts no liability for damage,
+data loss, downtime or any other consequences of using this software.
+
 ## License
 
-geowarden is released under the [MIT License](LICENSE).
+geowarden is released under the [MIT License](LICENSE), which includes the same disclaimer of warranty and liability.
 
 The geo data is downloaded at runtime and is not part of this project:
 [IP Geolocation by DB-IP](https://db-ip.com), licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
