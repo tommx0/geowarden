@@ -1,0 +1,49 @@
+name: Bug report
+description: Something does not work as described
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting! Please remove public IP addresses or other details you do not want to share from the output below.
+        Security problems should not be reported here, see [SECURITY.md](https://github.com/tommx0/geowarden/blob/main/SECURITY.md).
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What did you do, what did you expect, and what happened instead?
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: geowarden version
+      description: "Output of: dpkg -s geowarden | grep Version"
+      placeholder: "Version: 1.3.0"
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      placeholder: Debian 12, Ubuntu 24.04, ...
+    validations:
+      required: true
+  - type: textarea
+    id: log
+    attributes:
+      label: Log of the last runs
+      description: "Output of: journalctl -u geowarden.service -n 50 --no-pager"
+      render: text
+  - type: textarea
+    id: rules
+    attributes:
+      label: Loaded rules
+      description: "Output of: sudo nft list chain inet geowarden prerouting"
+      render: text
+  - type: textarea
+    id: config
+    attributes:
+      label: Configuration
+      description: "Content of /etc/geowarden.conf without comments: grep -v '^#' /etc/geowarden.conf"
+      render: shell

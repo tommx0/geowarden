@@ -7,6 +7,7 @@
 New connections to your server's public interfaces are accepted only from the countries you choose.
 Everything else is dropped before it reaches SSH, your web server or your Docker containers.
 
+[![Release](https://img.shields.io/github/v/release/tommx0/geowarden)](https://github.com/tommx0/geowarden/releases/latest)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 ![Debian 12 | 13](https://img.shields.io/badge/Debian-12%20%7C%2013-A81D33?logo=debian&logoColor=white)
 ![Ubuntu 22.04 | 24.04](https://img.shields.io/badge/Ubuntu-22.04%20%7C%2024.04-E95420?logo=ubuntu&logoColor=white)
