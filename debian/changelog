@@ -3,4 +3,4 @@ geowarden (1.0.0) stable; urgency=medium
   * Erste Paketversion: Menü-Tool, nftables-Allowlist mit DB-IP-Geodaten,
     systemd-Timer, automatische Erkennung des öffentlichen Interfaces.
 
- -- Thomas Marx <noreply@example.invalid>  Sun, 25 Oct 2026 23:15:00 +0000
+ -- Thomas Marx <103289949+tommx0@users.noreply.github.com>  Sun, 25 Oct 2026 23:15:00 +0000

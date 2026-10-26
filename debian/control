@@ -3,7 +3,7 @@ Version: @VERSION@
 Architecture: all
 Section: net
 Priority: optional
-Maintainer: Thomas Marx <noreply@example.invalid>
+Maintainer: Thomas Marx <103289949+tommx0@users.noreply.github.com>
 Depends: bash, nftables, curl, whiptail, python3, gzip, iproute2, systemd
 Installed-Size: @SIZE@
 Description: Länder-Allowlist für eingehende Verbindungen per nftables
