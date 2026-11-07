@@ -85,6 +85,7 @@ def default_route_ifaces():
 # --- Geo data ---------------------------------------------------------------------------
 
 def nonempty(path):
+    """True if the file exists and is not empty."""
     return os.path.exists(path) and os.path.getsize(path) > 0
 
 
@@ -107,17 +108,19 @@ def read_ranges(path, countries):
     separately for IPv4 and IPv6. Every line is parsed, so a damaged file raises an error
     instead of silently missing ranges."""
     ranges = {4: [], 6: []}
-    lines = 0
+    lines = 0  # also the line number in error messages
     try:
         with gzip.open(path, "rt", newline="") as f:
             for lines, row in enumerate(csv.reader(f), 1):
-                start, end, cc = row
+                start, end, cc = row  # ValueError if a line has not exactly three fields
                 version = 6 if ":" in start else 4
                 start, end = ip_int(start, version), ip_int(end, version)
                 if start > end:
                     raise ValueError("start after end")
                 if cc.lower() in countries:
                     ranges[version].append((start, end))
+    # OSError: unreadable or not gzip; EOFError: truncated download;
+    # ValueError: malformed line or address (inet_pton raises OSError for those as well)
     except (OSError, EOFError, ValueError) as e:
         raise Error(f"{os.path.basename(path)}, line {lines}: {e}")
     if lines < MIN_LINES:
@@ -128,9 +131,10 @@ def read_ranges(path, countries):
 def download(url, path):
     """Downloads a file, with retries like curl --retry 3."""
     request = urllib.request.Request(url, headers={"User-Agent": "geowarden"})
-    for attempt in range(4):
+    for attempt in range(4):  # first try plus 3 retries
         try:
             with urllib.request.urlopen(request, timeout=60) as r, open(path, "wb") as f:
+                # Stream in 64 KiB chunks instead of holding the whole file in memory
                 while True:
                     chunk = r.read(1 << 16)
                     if not chunk:
@@ -139,17 +143,18 @@ def download(url, path):
         except urllib.error.HTTPError as e:
             if e.code < 500:  # e.g. 404: file of this month not published yet
                 raise Error(f"{url}: {e}")
-            error = e
+            error = e  # server error: worth retrying
         except (OSError, http.client.HTTPException) as e:
-            error = e
-        time.sleep(2 ** attempt)
+            error = e  # network error or connection dropped mid-download
+        time.sleep(2 ** attempt)  # back off 1, 2, 4, 8 seconds
     raise Error(f"{url}: {error}")
 
 
 def load_geo_data(countries):
     """The ranges from the cached file of this (or last) month; downloads it if needed."""
     os.makedirs(CACHE, exist_ok=True)
-    errors = []
+    errors = []  # collected per attempt, shown only if all of them fail
+    # For each month, newest first: use the cache if valid, else download it
     for month in months():
         cached = os.path.join(CACHE, f"dbip-{month}.csv.gz")
         if nonempty(cached):
@@ -168,7 +173,9 @@ def load_geo_data(countries):
             if os.path.exists(part):
                 os.remove(part)
             continue
+        # Only a file that was read without errors becomes the cache file
         os.replace(part, cached)
+        # Remove older months, so the cache holds a single file
         for name in os.listdir(CACHE):
             if name.startswith("dbip-") and name.endswith(".csv.gz") and name != os.path.basename(cached):
                 os.remove(os.path.join(CACHE, name))
@@ -181,6 +188,7 @@ def merge(ranges):
     become one set element. That about halves the elements nft has to load."""
     merged = []
     for start, end in sorted(ranges):
+        # Starts inside or right after the previous range: extend that one
         if merged and start <= merged[-1][1] + 1:
             merged[-1][1] = max(merged[-1][1], end)
         else:
@@ -197,6 +205,8 @@ def nft_elements(ranges, version):
 # --- nftables ---------------------------------------------------------------------------
 
 def nft(*args, check=True):
+    """Runs nft. With check, a failure ends the script; otherwise the caller
+    looks at the result itself."""
     r = subprocess.run(["nft", *args], capture_output=True, text=True)
     if check and r.returncode != 0:
         raise Error(f"nft {' '.join(args)} failed - rules left unchanged\n{r.stderr.strip()}")
@@ -205,8 +215,12 @@ def nft(*args, check=True):
 
 def body(allow4, allow6, wan_if, open_tcp, open_udp, stats):
     """Allow sets and the chain. Requests that reach the country check are counted per
-    source address in dynamic sets for the statistics in the menu."""
+    source address in dynamic sets for the statistics in the menu.
+
+    Returns the lines that go inside "table inet geowarden { ... }". The rules are checked
+    from top to bottom; the first accept or drop ends the check for a packet."""
     lines = []
+    # Interval sets hold address ranges; auto-merge joins overlapping elements
     for name, addr_type, elements in (("allow4", "ipv4_addr", allow4),
                                       ("allow6", "ipv6_addr", allow6)):
         lines.append(f"  set {name} {{ type {addr_type}; flags interval; auto-merge;")
@@ -218,26 +232,37 @@ def body(allow4, allow6, wan_if, open_tcp, open_udp, stats):
     lines += [
         "  chain prerouting {",
         # priority -150: after conntrack (-200), before DNAT e.g. by Docker (-100)
+        # policy accept: this chain only drops; other firewalls keep working as before
         "    type filter hook prerouting priority -150; policy accept;",
+        # Only the public interfaces are filtered (VPN, Docker, lo are not)
         f"    iifname != {{ {ifaces} }} accept",
+        # Replies and existing connections, also the own outgoing ones: only new
+        # connections are checked, so an open SSH session is never cut off
         "    ct state established,related accept",
     ]
+    # Ports open worldwide (OPEN_TCP / OPEN_UDP)
     if open_tcp:
         lines.append(f"    tcp dport {{ {', '.join(open_tcp)} }} accept")
     if open_udp:
         lines.append(f"    udp dport {{ {', '.join(open_udp)} }} accept")
+    # Traffic the server needs to keep its own network working
     lines += [
-        "    udp sport 67 udp dport 68 accept",
-        "    ip6 saddr fe80::/10 accept",
+        "    udp sport 67 udp dport 68 accept",  # DHCP replies from the provider
+        "    ip6 saddr fe80::/10 accept",        # IPv6 link-local (router, neighbours)
+        # IPv6 neighbour discovery and router adverts (address and default route)
         "    icmpv6 type { nd-neighbor-solicit, nd-neighbor-advert, nd-router-advert } accept",
     ]
-    # Counting in rules of their own: a full statistics set must never change the verdict
+    # The country check: source in an allow set -> accept, everything else -> drop.
+    # "counter name ..." adds to the named counters allowed/blocked (totals in the menu).
+    # Counting in rules of their own: a full statistics set must never change the verdict.
+    # "update @set { key counter }" adds the key if missing and counts the packet on it.
     if stats:
         lines.append("    ip saddr @allow4 update @stat_allow4 { ip saddr counter }")
     lines.append("    ip saddr @allow4 counter name allowed accept")
     if stats:
         lines.append(f"    ip6 saddr @allow6 update @stat_allow6 {{ ip6 saddr and {V6NET} counter }}")
     lines.append("    ip6 saddr @allow6 counter name allowed accept")
+    # Whatever is left comes from a country that is not allowed
     if stats:
         lines.append("    meta nfproto ipv4 update @stat_block4 { ip saddr counter }")
         lines.append(f"    meta nfproto ipv6 update @stat_block6 {{ ip6 saddr and {V6NET} counter }}")
@@ -262,6 +287,8 @@ def keep_ruleset(body_lines):
 def new_ruleset(body_lines, stats_max):
     """First start, after a reboot or an older version: the whole table anew."""
     lines = [f"add table {TABLE}", f"delete table {TABLE}", f"table {TABLE} {{"]
+    # Statistics sets: filled by the rules ("flags dynamic"); when "size" is reached,
+    # new addresses are no longer added (they still count in the totals)
     if stats_max:
         for name, addr_type in (("allow4", "ipv4_addr"), ("block4", "ipv4_addr"),
                                 ("allow6", "ipv6_addr"), ("block6", "ipv6_addr")):
@@ -272,12 +299,14 @@ def new_ruleset(body_lines, stats_max):
 
 def loaded_stats_size():
     """Size of the loaded statistics sets, 0 if there are none."""
+    # All four sets have the same size, so looking at one is enough
     out = nft("list", "set", *TABLE.split(), "stat_block4", check=False).stdout
     m = re.search(r"^\s*size (\d+)", out, re.M)
     return int(m.group(1)) if m else 0
 
 
 def write(path, lines):
+    """Writes lines to a file and returns its path."""
     with open(path, "w") as f:
         f.write("\n".join(lines) + "\n")
     return path
@@ -286,6 +315,7 @@ def write(path, lines):
 # --- Main -------------------------------------------------------------------------------
 
 def turn_off():
+    """ENABLED is not "yes": remove the whole table (no error if it isn't loaded)."""
     nft("delete", "table", *TABLE.split(), check=False)
     if os.path.exists(STATS_SINCE):
         os.remove(STATS_SINCE)
@@ -293,6 +323,9 @@ def turn_off():
 
 
 def apply(conf, workdir):
+    """Checks the config, builds the rules and loads them. workdir is a temporary
+    directory for the .nft files."""
+    # Validate all settings first, before anything is downloaded or loaded
     countries = set(words(conf, "COUNTRIES", r"[A-Za-z]{2}", "a two-letter country code"))
     countries = {c.lower() for c in countries}
     wan_if = words(conf, "WAN_IF", r"[\w.:@+*-]{1,15}", "an interface name") or default_route_ifaces()
@@ -304,12 +337,14 @@ def apply(conf, workdir):
         raise Error(f"STATS_MAX in {CONF} must be a number")
     stats_max = int(stats_max)
 
+    # Geo data -> merged ranges -> nft element strings
     ranges = load_geo_data(countries)
     allow4 = nft_elements(merge(ranges[4]), 4)
     allow6 = nft_elements(merge(ranges[6]), 6)
     if countries and not allow4 and not allow6:
         raise Error("No IP ranges found for the selected countries - rules left unchanged")
 
+    # Both variants are prepared; which one is loaded is decided below
     body_lines = body(allow4, allow6, wan_if, open_tcp, open_udp, stats_max > 0)
     keep = write(os.path.join(workdir, "keep.nft"), keep_ruleset(body_lines))
     new = write(os.path.join(workdir, "new.nft"), new_ruleset(body_lines, stats_max))
@@ -321,6 +356,7 @@ def apply(conf, workdir):
     if not (loaded_stats_size() == stats_max and (nonempty(STATS_SINCE) or stats_max == 0)
             and nft("-f", keep, check=False).returncode == 0):
         nft("-f", new)
+        # New table = empty statistics, so their start time is now
         if os.path.exists(STATS_SINCE):
             os.remove(STATS_SINCE)
         if stats_max:
@@ -333,6 +369,8 @@ def apply(conf, workdir):
 
 
 def main():
+    """Entry point for the timer, the service and the menu. Errors end with exit
+    code 1 and a message; the rules stay as they were."""
     try:
         conf = read_conf()
         if conf.get("ENABLED", "no") != "yes":

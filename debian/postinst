@@ -1,4 +1,6 @@
 #!/bin/sh
+# Runs after the files are unpacked, on first install and on every upgrade
+# ($1 = "configure", $2 = the previously installed version, empty on first install).
 set -e
 
 if [ "$1" = "configure" ]; then
@@ -6,12 +8,15 @@ if [ "$1" = "configure" ]; then
 	[ -e /etc/geowarden.conf ] || install -m 644 /usr/share/geowarden/geowarden.conf /etc/geowarden.conf
 	mkdir -p /var/cache/geowarden
 
+	# Only with systemd running (not e.g. in a container build or chroot)
 	if [ -d /run/systemd/system ]; then
 		systemctl daemon-reload
+		# The timer loads the rules at boot and refreshes them daily
 		systemctl enable geowarden.timer >/dev/null 2>&1 || true
 		systemctl start geowarden.timer || true
 		# After an upgrade, reload the rules with the new version
 		if grep -q '^ENABLED="yes"' /etc/geowarden.conf; then
+			# --no-block: don't make apt wait for the geo data download
 			systemctl start --no-block geowarden.service || true
 		fi
 	fi
