@@ -77,7 +77,7 @@ Everything else is dropped before it reaches SSH, your web server or your Docker
 - Root access
 - Outbound HTTPS to `download.db-ip.com` for the monthly geo data (about 5 MB)
 
-The package pulls in its dependencies automatically: `nftables`, `curl`, `whiptail`, `python3`, `gzip`, `iproute2` and `systemd`.
+The package pulls in its dependencies automatically: `nftables`, `whiptail`, `python3`, `iproute2` and `systemd`.
 
 ## Installation
 
@@ -180,7 +180,7 @@ OPEN_UDP=""
 `geowarden.timer` runs `geowarden-apply` one minute after boot and once a day. The script
 
 1. uses this month's DB-IP file from `/var/cache/geowarden`, or downloads it (falling back to last month's file early in the month),
-2. extracts the IP ranges of the allowed countries,
+2. extracts the IP ranges of the allowed countries and joins neighbouring ranges into one,
 3. replaces the nftables table `inet geowarden` in one atomic transaction.
 
 The rules hook into `prerouting` at priority −150. That is after connection tracking and before Docker's DNAT:
