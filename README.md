@@ -27,6 +27,7 @@ Everything else is dropped before it reaches SSH, your web server or your Docker
 - **Leaves other firewalls alone.** geowarden only manages its own table (`inet geowarden`). Docker, ufw, CrowdSec and others are not touched.
 - **IPv4 and IPv6.** Both address families are filtered.
 - **See who is knocking.** A colored world map and top 10 lists show allowed and blocked requests by country and by address. You can see when counting started and reset the statistics at any time.
+- **Live view.** Watch requests as they come in: the country of each new request blinks on the world map, and the last 10 requests are listed with time, address and country.
 
 ## Screenshots
 
@@ -151,6 +152,12 @@ Good to know:
 - The statistics live in the kernel. They keep counting through the daily reload, but start over after a reboot or when you turn blocking off and on again.
 - Each of the four lists (IPv4 and IPv6, allowed and blocked) keeps up to `STATS_MAX` addresses, 10,000 by default. One address needs about 160 to 280 bytes of kernel memory depending on the number of CPUs, so the default uses at most about 6 to 11 MB. If a list is full, new addresses still count in the totals, and the views tell you how many requests they cannot place. The busiest addresses are usually listed early, so the top 10 stay meaningful.
 - The map needs a terminal with 256 colors and at least 44×16 characters. A wider terminal gives a more detailed map.
+
+### Live view
+
+Open **Live view** in the menu to watch requests as they arrive. Every second the menu reads the statistics again: the country of each new request blinks on the map for three seconds (red and white for blocked, green and white for allowed), and the last 10 requests are listed below with time, result, address, country and how many requests came in that second. Press `q`, Enter or Esc to go back.
+
+The live view only runs while it is open and does not change the rules. It shows only what the statistics count, so it needs `STATS_MAX` above 0, and addresses that no longer fit into a full list do not appear. It needs a terminal of at least 44×21 characters.
 
 ### Configuration
 
