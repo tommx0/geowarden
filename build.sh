@@ -4,10 +4,13 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 VERSION=$(sed -n '1s/.*(\(.*\)).*/\1/p' debian/changelog)
+# Year of the release: from the date in the first trailer line " -- Name  Sat, 07 Nov 2026 ..."
+YEAR=$(awk '/^ -- /{print $(NF-2); exit}' debian/changelog)
 B=$(mktemp -d)
 trap 'rm -rf "$B"' EXIT
 
 install -D -m 755 src/geowarden          "$B/usr/sbin/geowarden"
+sed -i -e "s/@VERSION@/$VERSION/" -e "s/@YEAR@/$YEAR/" "$B/usr/sbin/geowarden"
 install -D -m 755 src/geowarden-apply    "$B/usr/sbin/geowarden-apply"
 install -D -m 644 src/geowarden.conf     "$B/usr/share/geowarden/geowarden.conf"
 install -D -m 644 src/worldmap.txt       "$B/usr/share/geowarden/worldmap.txt"
