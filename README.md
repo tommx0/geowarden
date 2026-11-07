@@ -50,11 +50,22 @@ Everything else is dropped before it reaches SSH, your web server or your Docker
     <td colspan="2"><img src="docs/screenshots/top-addresses.png" alt="Top 10 allowed and blocked addresses"></td>
   </tr>
   <tr>
-    <td colspan="2" align="center"><sub>Top 10 source addresses overall, with their country</sub></td>
+    <td colspan="2" align="center"><sub>Top 10 source addresses overall, with their country: <code>!</code> suspected scanner, <code>x</code> in the blocked networks</sub></td>
+  </tr>
+  <tr>
+    <td colspan="2"><img src="docs/screenshots/suspicious-networks.png" alt="Suspicious networks with many different source addresses"></td>
+  </tr>
+  <tr>
+    <td colspan="2" align="center"><sub>Suspicious networks: many different addresses from one block hint at a scanner</sub></td>
   </tr>
 </table>
 
-<sub>The statistics screenshots show demo data with documentation addresses (RFC 5737 and RFC 3849).</sub>
+<p align="center">
+  <img src="docs/screenshots/live-view.png" alt="Live view with blinking countries and the last 10 requests" width="820">
+  <br><sub>Live view: countries of new requests blink on the map, the last 10 requests are listed below</sub>
+</p>
+
+<sub>The statistics screenshots show demo data with reserved addresses (198.18.0.0/15 from RFC 2544 and 2001:db8::/32 from RFC 3849).</sub>
 
 <table>
   <tr>
@@ -62,14 +73,16 @@ Everything else is dropped before it reaches SSH, your web server or your Docker
     <td><img src="docs/screenshots/continents.png" alt="Choosing a continent"></td>
   </tr>
   <tr>
-    <td align="center"><sub>Status: rules loaded, blocked packets, geo data, allowed countries per continent</sub></td>
+    <td align="center"><sub>Status: rules loaded, requests, geo data, blocked networks, allowed countries per continent</sub></td>
     <td align="center"><sub>Edit countries by continent</sub></td>
   </tr>
   <tr>
-    <td colspan="2"><img src="docs/screenshots/countries.png" alt="Selecting individual countries in Europe"></td>
+    <td><img src="docs/screenshots/countries.png" alt="Selecting individual countries in Europe"></td>
+    <td><img src="docs/screenshots/blocked-networks.png" alt="List of blocked networks"></td>
   </tr>
   <tr>
-    <td colspan="2" align="center"><sub>Tick individual countries with the space bar</sub></td>
+    <td align="center"><sub>Tick individual countries with the space bar</sub></td>
+    <td align="center"><sub>Blocked networks: always dropped, whatever their country</sub></td>
   </tr>
 </table>
 
