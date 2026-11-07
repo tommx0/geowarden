@@ -1,4 +1,6 @@
 #!/bin/sh
+# Runs before the files are removed. $1 = "remove" when the package is removed,
+# "upgrade" before an upgrade: then the rules stay loaded and postinst reloads them.
 set -e
 
 if [ "$1" = "remove" ]; then
