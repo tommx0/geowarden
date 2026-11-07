@@ -88,8 +88,8 @@ The package pulls in its dependencies automatically: `nftables`, `whiptail`, `py
 Download the Debian package from the [latest release](https://github.com/tommx0/geowarden/releases/latest) and install it:
 
 ```bash
-curl -LO https://github.com/tommx0/geowarden/releases/download/v1.5.0/geowarden_1.5.0_all.deb
-sudo apt install ./geowarden_1.5.0_all.deb
+curl -LO https://github.com/tommx0/geowarden/releases/download/v1.6.0/geowarden_1.6.0_all.deb
+sudo apt install ./geowarden_1.6.0_all.deb
 ```
 
 This installs the menu tool, the systemd service and the timer. The timer is enabled right away. **Blocking stays off** until you turn it on.

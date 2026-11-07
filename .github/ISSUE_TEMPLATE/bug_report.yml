@@ -19,7 +19,7 @@ body:
     attributes:
       label: geowarden version
       description: "Output of: dpkg -s geowarden | grep Version"
-      placeholder: "Version: 1.5.0"
+      placeholder: "Version: 1.6.0"
     validations:
       required: true
   - type: input
