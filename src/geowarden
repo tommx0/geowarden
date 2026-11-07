@@ -7,6 +7,7 @@ collect per source address, as a world map and as top 10 lists.
 """
 import bisect
 import gzip
+import ipaddress
 import json
 import math
 import os
@@ -47,6 +48,14 @@ BOLD = "\033[1m"
 LIVE_POLL = 1.0
 LIVE_LIT = 3.0
 LIVE_EVENTS = 10
+
+# "scanner?" hint: a network is suspicious if it sent requests from at least this many
+# different source addresses. Scan farms rotate through the addresses of their block;
+# normal visitors rarely come from that many addresses of one network. The /22 level
+# catches farms that spread over a whole block with only a few addresses per /24.
+# Per IP version: (prefix length, minimum addresses), smallest network first.
+SCANNER_LEVELS = {4: ((24, 8), (22, 12)), 6: ((48, 8),)}
+HINT = 214                # color of the "scanner?" hint
 FLASH = 231
 
 # Continent keys used in COUNTRY_TABLE, in menu order
@@ -367,14 +376,76 @@ def write_conf(key, value):
     """Sets KEY="value" and keeps all other lines and comments as they are."""
     text, _ = read_conf()
     new = re.sub(rf'^{key}="[^"]*"', f'{key}="{value}"', text, count=1, flags=re.M)
-    # Key not in the file yet: add it at the top
+    # Key not in the file yet (older configuration): add it at the end
     if new == text and f'{key}="{value}"' not in text:
-        new = f'{key}="{value}"\n' + text
+        new = text.rstrip("\n") + f'\n\n{key}="{value}"\n'
     # Write a temporary file and rename it, so the config is never half written
     tmp = CONF + ".tmp"
     with open(tmp, "w") as f:
         f.write(new)
     os.replace(tmp, CONF)
+
+
+def parse_nets(values):
+    """The valid networks among BLOCK_NETS entries. Invalid ones are left out here;
+    geowarden-apply refuses them with a message."""
+    nets = []
+    for v in values:
+        try:
+            nets.append(ipaddress.ip_network(v, strict=False))
+        except ValueError:
+            pass
+    return nets
+
+
+def blocked_nets():
+    """Networks from BLOCK_NETS."""
+    return parse_nets(read_conf()[1].get("BLOCK_NETS", "").split())
+
+
+def in_networks(addr, nets):
+    """True if the address (or the first address of a network) is in one of the networks."""
+    ip = ipaddress.ip_address(addr.split("/")[0])
+    return any(ip.version == n.version and ip in n for n in nets)
+
+
+def net_of(addr, prefix=None):
+    """The network of an address with the given prefix length, by default the smallest
+    scanner level (/24 or /48). IPv4 by bit mask, because the live view calls this often."""
+    version = 6 if ":" in addr else 4
+    prefix = prefix or SCANNER_LEVELS[version][0][0]
+    if version == 4:
+        mask = (0xFFFFFFFF << (32 - prefix)) & 0xFFFFFFFF
+        n = int.from_bytes(socket.inet_aton(addr), "big") & mask
+        return f"{socket.inet_ntoa(n.to_bytes(4, 'big'))}/{prefix}"
+    return str(ipaddress.ip_network(f"{addr}/{prefix}", strict=False))
+
+
+def addresses_per_net(addrs):
+    """{network: number of different addresses} at every scanner level."""
+    counts = {}
+    for addr in set(addrs):
+        for prefix, _ in SCANNER_LEVELS[6 if ":" in addr else 4]:
+            net = net_of(addr, prefix)
+            counts[net] = counts.get(net, 0) + 1
+    return counts
+
+
+def suspect_net(addr, per_net):
+    """The smallest network of the address that counts as suspicious, or None."""
+    for prefix, minimum in SCANNER_LEVELS[6 if ":" in addr else 4]:
+        net = net_of(addr, prefix)
+        if per_net.get(net, 0) >= minimum:
+            return net
+    return None
+
+
+def address_hint(addr, nets, per_net):
+    """"listed" if the address is in a blocked network, "scanner?" if one of its networks
+    sent requests from many different addresses, else ""."""
+    if in_networks(addr, nets):
+        return "listed"
+    return "scanner?" if suspect_net(addr, per_net) else ""
 
 
 def allowed():
@@ -416,17 +487,27 @@ def wan_ifaces():
     return sorted(set(found))
 
 
-def ssh_warning():
-    """Warns if our own SSH connection comes in via a public interface and is not allowed."""
+def filtered_ssh_client():
+    """Address of our own SSH client if its connection comes in via a filtered interface,
+    otherwise "" (not logged in via SSH, or e.g. via Tailscale or the LAN)."""
     # SSH_CLIENT is "client-ip client-port server-port"; empty when not logged in via SSH
     client = os.environ.get("SSH_CLIENT", "").split(" ")[0]
-    if not client or not table_loaded():
+    if not client:
         return ""
     # Replies to the client leave through the interface it came in on. If that is not a
-    # filtered one (e.g. Tailscale or LAN), the rules don't apply to this connection.
+    # filtered one, the rules don't apply to this connection.
     route = subprocess.run(["ip", "route", "get", client], capture_output=True, text=True).stdout
-    if not any(f"dev {w} " in route for w in wan_ifaces()):
+    return client if any(f"dev {w} " in route for w in wan_ifaces()) else ""
+
+
+def ssh_warning():
+    """Warns if our own SSH connection comes in via a public interface and is not allowed."""
+    client = filtered_ssh_client()
+    if not client or not table_loaded():
         return ""
+    if in_networks(client, blocked_nets()):
+        return (f"\n\nWARNING: Your SSH address {client} is in a blocked network. The current "
+                "connection stays open, but a new one will be blocked!")
     # "nft get element" fails if the address is in none of the ranges of the allow set
     setname = "allow6" if ":" in client else "allow4"
     r = subprocess.run(["nft", "get", "element", "inet", "geowarden", setname, f"{{ {client} }}"],
@@ -465,6 +546,91 @@ def set_countries(codes):
         apply()
 
 
+def set_blocked_nets(nets):
+    """Saves BLOCK_NETS and applies it if blocking is on."""
+    write_conf("BLOCK_NETS", " ".join(nets))
+    if enabled():
+        apply()
+    else:
+        msg("Saved. The blocked networks take effect when blocking is turned on.", 8, 64)
+
+
+def add_blocked_net(suggest=""):
+    """Asks for a network or address (suggest is filled in) and adds it to BLOCK_NETS."""
+    ok, value = whiptail("--inputbox",
+                         "Network or address to block, for example\n"
+                         "109.196.32.0/21, 203.0.113.7 or 2001:db8::/32", "10", "64", suggest)
+    value = value.strip()
+    if not ok or not value:
+        return
+    try:
+        net = ipaddress.ip_network(value, strict=False)  # 109.196.36.1/21 -> 109.196.32.0/21
+    except ValueError:
+        msg(f"{value!r} is not a network or address.", 8, 60)
+        return
+    current = read_conf()[1].get("BLOCK_NETS", "").split()
+    if any(net.version == n.version and net.subnet_of(n) for n in blocked_nets()):
+        msg(f"{net} is already blocked.", 8, 60)
+        return
+    client = filtered_ssh_client()
+    if client and in_networks(client, [net]):
+        ok, _ = whiptail("--defaultno", "--yesno",
+                         f"WARNING: Your own SSH address {client} is in {net}. The current "
+                         "connection stays open, but new SSH connections from it will be "
+                         "blocked.\n\nBlock it anyway?", "11", "68")
+        if not ok:
+            return
+    # Very large networks are more likely a typo than intended
+    if net.prefixlen < (16 if net.version == 4 else 32):
+        ok, _ = whiptail("--defaultno", "--yesno",
+                         f"{net} has {net.num_addresses:,} addresses.\n\nBlock all of them?", "10", "68")
+        if not ok:
+            return
+    # Entries inside the new network are no longer needed
+    keep = [v for v in current
+            if not any(n.version == net.version and n.subnet_of(net) for n in parse_nets([v]))]
+    set_blocked_nets(keep + [str(net)])
+
+
+def edit_blocked_nets():
+    """Blocked networks: list, add, remove, and whether they may still use the open ports."""
+    while True:
+        conf = read_conf()[1]
+        nets = conf.get("BLOCK_NETS", "").split()
+        on_ports = conf.get("BLOCK_NETS_OPEN_PORTS", "yes") == "yes"
+        open_ports = ([f"tcp/{p}" for p in conf.get("OPEN_TCP", "").split()]
+                      + [f"udp/{p}" for p in conf.get("OPEN_UDP", "").split()])
+        items = ["a", "Add a network or address",
+                 "p", f"Open ports ({' '.join(open_ports) or 'none'}): "
+                      f"{'blocked too' if on_ports else 'still open to them'}"]
+        for i, v in enumerate(nets, 1):
+            items += [str(i), f"{v:<40} {country_name(country_of(v.split('/')[0]))[:20]}"]
+        ok, choice = whiptail("--cancel-button", "Back", "--menu",
+                              "Requests from these networks are dropped, whatever their country. "
+                              "Existing connections stay open. Choose an entry to remove it.",
+                              str(min(22, 12 + len(nets))), "76", str(min(12, 2 + len(nets))), *items)
+        if not ok:
+            return
+        if choice == "a":
+            add_blocked_net()
+        elif choice == "p":
+            ok, _ = whiptail(*(["--defaultno"] if not on_ports else []), "--yesno",
+                             "Should blocked networks also be blocked on the open ports "
+                             f"({' '.join(open_ports) or 'none'})?\n\n"
+                             "Yes: they cannot reach anything (recommended for scanners).\n"
+                             "No: the open ports stay open to them, e.g. for tcp/80 and the "
+                             "Let's Encrypt HTTP-01 challenge.",
+                             "13", "70")
+            write_conf("BLOCK_NETS_OPEN_PORTS", "yes" if ok else "no")
+            if enabled():
+                apply()
+        else:
+            v = nets[int(choice) - 1]
+            ok, _ = whiptail("--yesno", f"Remove {v} from the blocked networks?", "8", "64")
+            if ok:
+                set_blocked_nets([n for n in nets if n != v])
+
+
 def show_status():
     """Overview: config vs. loaded state, request totals, geo data and allowed countries."""
     a = allowed()
@@ -480,8 +646,9 @@ def show_status():
         f"Statistics since:      {format_time(since) if since else '-'}\n"
         f"Requests:              {counter('allowed'):,} allowed, {counter('blocked'):,} blocked\n"
         f"Geo data:              {cache[-1] if cache else '-'}\n"
-        f"Filtered interfaces:   {' '.join(wan_ifaces()) or '-'}\n\n"
-        f"Allowed countries: {len(a)}\n{per}", 21, 66)
+        f"Filtered interfaces:   {' '.join(wan_ifaces()) or '-'}\n"
+        f"Blocked networks:      {len(blocked_nets())}\n\n"
+        f"Allowed countries: {len(a)}\n{per}", 22, 66)
 
 
 def show_allowed():
@@ -845,6 +1012,7 @@ def live_view():
     whiptail("--infobox", "Starting live view ...", "7", "50")
     country_of("0.0.0.0")       # loads the geo data now instead of at the first request
     base = map_colors({}, allowed())
+    nets = blocked_nets()       # BLOCK_NETS does not change while the view is open
     last = all_hits()           # what was counted before the view opened is not shown
     events = []                 # newest first: (time, kind, address, country, requests)
     lit = {}                    # country -> (kind, time when it stops blinking)
@@ -860,12 +1028,16 @@ def live_view():
             now = time.time()
             if now >= next_poll:
                 current = all_hits()
+                per_net = None  # addresses per network, only computed when needed
                 for (kind, addr), n in current.items():
                     # Lower than before after a reset or a reload: no new request
                     new = n - last.get((kind, addr), 0)
                     if new > 0:
                         cc = country_of(addr)
-                        events.insert(0, (now, kind, addr, cc, new))
+                        if per_net is None:
+                            per_net = addresses_per_net(a for _, a in current)
+                        hint = address_hint(addr, nets, per_net)
+                        events.insert(0, (now, kind, addr, cc, new, hint))
                         lit[cc] = (kind, now + LIVE_LIT)
                 del events[LIVE_EVENTS:]
                 last, next_poll = current, now + LIVE_POLL
@@ -898,11 +1070,12 @@ def draw_live(base, lit, events, now):
     # Lit countries count as traffic for render_map, so even tiny ones get a pixel
     lines += [pad + l for l in render_map({cc: (1, 0) for cc in lit}, colors, width, height)]
     lines += ["", f"  {BOLD}Last {LIVE_EVENTS} requests{RESET}"]
-    for t, kind, addr, cc, n in events:
+    for t, kind, addr, cc, n, hint in events:
         color, word = (RED[2], "blocked") if kind == "block" else (GREEN[2], "allowed")
         times = f"  x{n}" if n > 1 else ""
+        hint = f"  {fg(HINT)}{hint}{RESET}" if hint else ""
         lines.append(f"  {time.strftime('%H:%M:%S', time.localtime(t))}  {fg(color)}{word}{RESET}  "
-                     f"{addr:<39}  {country_name(cc)[:30]}{times}")
+                     f"{addr:<39}  {country_name(cc)[:30]}{times}{hint}")
     if not events:
         lines.append("  Waiting for requests ...")
     # Overwrite in place instead of clearing the screen first, so nothing flickers.
@@ -943,11 +1116,68 @@ def top_lines(title, since, ranked, label_width, tag_width, bars):
 
 
 def show_top_addresses(since):
-    """Top 10 source addresses overall, with their country code."""
+    """Top 10 source addresses overall, with their country code and a hint mark.
+    Typing an address opens the dialog to block its network."""
     countries, addrs = collect_stats()
-    ranked = {k: [(n, addr, cc.upper()) for n, addr, cc in v] for k, v in addrs.items()}
-    show_screen(top_lines("Top 10 addresses (IPv6 grouped by /64)", since, ranked, 21, 2, False)
-                + untracked_note(countries))
+    nets = blocked_nets()
+    per_net = addresses_per_net(a for v in addrs.values() for _, a, _ in v)
+    mark = {"listed": "x", "scanner?": "!", "": ""}
+    ranked = {k: [(n, addr, f"{mark[address_hint(addr, nets, per_net)]:>1} {cc.upper()}")
+                  for n, addr, cc in v] for k, v in addrs.items()}
+    lines = (top_lines("Top 10 addresses (IPv6 grouped by /64)", since, ranked, 21, 4, False)
+             + untracked_note(countries)
+             + ["", f"  {fg(HINT)}!{RESET} scanner suspected (many addresses from its network)   "
+                    "x in the blocked networks"])
+    value = show_screen(lines, "Address to block its network, or Enter to go back: ").strip()
+    if value:
+        try:
+            ipaddress.ip_address(value)
+        except ValueError:
+            msg(f"{value!r} is not an address.", 8, 60)
+            return
+        # Suggest the suspicious network if there is one, else the /24 (/48)
+        add_blocked_net(suspect_net(value, per_net) or net_of(value))
+
+
+def suspicious_networks(addrs):
+    """Suspicious networks (see SCANNER_LEVELS), most addresses first:
+    [(addresses, requests, network, country, allowed, blocked)]. Each address belongs to
+    its smallest suspicious network, so a /24 and the /22 around it are not counted twice."""
+    per_net = addresses_per_net(a for v in addrs.values() for _, a, _ in v)
+    nets = {}
+    for kind in ("allow", "block"):
+        for n, addr, cc in addrs[kind]:
+            net = suspect_net(addr, per_net)
+            if net:
+                e = nets.setdefault(net, {"addrs": set(), "allow": 0, "block": 0, "cc": cc})
+                e["addrs"].add(addr)
+                e[kind] += n
+    return sorted(((len(e["addrs"]), e["allow"] + e["block"], net, e["cc"], e["allow"], e["block"])
+                   for net, e in nets.items()), reverse=True)
+
+
+def show_suspicious(since):
+    """Networks that look like scanners; typing a number opens the dialog to block one."""
+    countries, addrs = collect_stats()
+    rows = suspicious_networks(addrs)[:15]
+    nets = blocked_nets()
+    lines = header("Suspicious networks", since)
+    levels = ", ".join(f"/{p} with {m}+" for v in (4, 6) for p, m in SCANNER_LEVELS[v])
+    lines += [f"  Networks with many different source addresses ({levels}).",
+              "  Scanners rotate through the addresses of their block; normal visitors rarely do.",
+              "  This is only a hint: many users behind one provider can look the same.", ""]
+    if not rows:
+        show_screen(lines + ["  None found."])
+        return
+    lines.append(f"  {BOLD} #  {'Network':<22} {'Addresses':>9} {'Requests':>9} "
+                 f"{'Allowed':>8} {'Blocked':>8}  Country{RESET}")
+    for i, (count, total, net, cc, a, b) in enumerate(rows, 1):
+        listed = "  (blocked network)" if in_networks(net, nets) else ""
+        lines.append(f"  {i:>2}  {net:<22} {count:>9} {total:>9,} {fg(GREEN[2])}{a:>8,}{RESET} "
+                     f"{fg(RED[2])}{b:>8,}{RESET}  {country_name(cc)[:20]}{listed}")
+    choice = show_screen(lines, "Number to block that network, or Enter to go back: ").strip()
+    if choice.isdigit() and 1 <= int(choice) <= len(rows):
+        add_blocked_net(rows[int(choice) - 1][2])
 
 
 def show_top_countries(since):
@@ -1009,11 +1239,12 @@ def statistics():
         ok, choice = whiptail("--cancel-button", "Back", "--menu",
                               f"Statistics since {format_time(since)}\n"
                               f"Requests: {counter('allowed'):,} allowed, {counter('blocked'):,} blocked",
-                              "15", "66", "4",
+                              "16", "66", "5",
                               "1", "World map",
                               "2", "Top 10 countries",
                               "3", "Top 10 addresses",
-                              "4", "Reset statistics")
+                              "4", "Suspicious networks (scanner hint)",
+                              "5", "Reset statistics")
         if not ok:
             return
         if choice == "1":
@@ -1022,6 +1253,8 @@ def statistics():
             show_top_countries(since)
         elif choice == "3":
             show_top_addresses(since)
+        elif choice == "4":
+            show_suspicious(since)
         else:
             reset_stats()
 
@@ -1035,18 +1268,19 @@ def main():
     while True:
         state = "ON" if enabled() else "OFF"
         ok, choice = whiptail("--cancel-button", "Quit", "--menu",
-                              f"Blocking is {state} - {len(allowed())} countries allowed", "17", "60", "6",
+                              f"Blocking is {state} - {len(allowed())} countries allowed", "18", "60", "7",
                               "1", "Show status",
                               "2", "Turn blocking off" if state == "ON" else "Turn blocking on",
                               "3", "Edit countries (by continent)",
                               "4", "Show allowed countries",
-                              "5", "Statistics and world map",
-                              "6", "Live view")
+                              "5", "Blocked networks",
+                              "6", "Statistics and world map",
+                              "7", "Live view")
         if not ok:
             return
         # Dispatch the chosen menu tag to its function
         {"1": show_status, "2": toggle_enabled, "3": edit_countries, "4": show_allowed,
-         "5": statistics, "6": live_view}[choice]()
+         "5": edit_blocked_nets, "6": statistics, "7": live_view}[choice]()
 
 
 if __name__ == "__main__":
