@@ -15,8 +15,8 @@ Security problems go through [private reporting](SECURITY.md) instead.
 ## Pull requests
 
 - Keep changes small and focused, one topic per pull request.
-- Match the existing style: Bash for the rule loader (`src/geowarden-apply`), plain Python 3
-  without extra packages for the menu (`src/geowarden`).
+- Match the existing style: plain Python 3 without extra packages for both the rule loader
+  (`src/geowarden-apply`) and the menu (`src/geowarden`).
 - Test on a Debian or Ubuntu machine or container: build with `./build.sh`, install the package,
   turn blocking on and check `sudo nft list chain inet geowarden prerouting`.
 - Never lock anyone out: changes must keep established connections, unfiltered interfaces

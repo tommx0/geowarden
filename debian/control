@@ -4,7 +4,7 @@ Architecture: all
 Section: net
 Priority: optional
 Maintainer: Thomas Marx <103289949+tommx0@users.noreply.github.com>
-Depends: bash, nftables, curl, whiptail, python3, gzip, iproute2, systemd
+Depends: nftables, whiptail, python3, iproute2, systemd
 Installed-Size: @SIZE@
 Description: country allowlist for incoming connections via nftables
  Accepts new connections on the public interfaces only from selected

@@ -1,141 +1,349 @@
-#!/bin/bash
-# Loads the IP ranges of the allowed countries and sets the nftables table "inet geowarden".
-# New connections on the public interfaces from any other address are dropped.
-set -euo pipefail
+#!/usr/bin/python3 -I
+"""geowarden-apply - loads the country allowlist into the nftables table "inet geowarden".
 
-CONF=/etc/geowarden.conf
-[ -r "$CONF" ] || { echo "$CONF is missing" >&2; exit 1; }
-. "$CONF"
+Reads /etc/geowarden.conf, takes the IP ranges of the allowed countries from the DB-IP
+geolocation data and loads them together with the filter chain. New connections on the
+public interfaces from any other address are dropped. Run daily by geowarden.timer and
+by the menu "geowarden" after every change.
 
+If anything goes wrong (download, data, configuration, nft) the current rules stay as
+they are and the script exits with an error message.
+"""
+import csv
+import datetime
+import gzip
+import http.client
+import ipaddress
+import os
+import re
+import socket
+import subprocess
+import sys
+import tempfile
+import time
+import urllib.error
+import urllib.request
+
+CONF = "/etc/geowarden.conf"
+CACHE = "/var/cache/geowarden"
 # Start time of the statistics. Like the kernel counters, it does not survive a reboot.
-STATS=/run/geowarden/stats-since
-
-if [ "${ENABLED:-no}" != "yes" ]; then
-	nft delete table inet geowarden 2>/dev/null || true
-	rm -f "$STATS"
-	echo "geowarden: blocking turned off"
-	exit 0
-fi
-
-# Without WAN_IF: interfaces of the default routes (IPv4 and IPv6)
-if [ -z "${WAN_IF:-}" ]; then
-	WAN_IF=$( { ip -4 -o route show default; ip -6 -o route show default; } \
-		| grep -o 'dev [^ ]*' | cut -d' ' -f2 | sort -u | tr '\n' ' ')
-fi
-WAN_IF=$(echo $WAN_IF)
-[ -n "$WAN_IF" ] || { echo "No public interface found - please set WAN_IF in $CONF" >&2; exit 1; }
-
-# Older configurations have no STATS_MAX
-STATS_MAX=${STATS_MAX-10000}
-[[ $STATS_MAX =~ ^[0-9]+$ ]] || { echo "STATS_MAX in $CONF must be a number" >&2; exit 1; }
+STATS_SINCE = "/run/geowarden/stats-since"
+TABLE = "inet geowarden"
 
 # Geolocation data: "IP Geolocation by DB-IP" (https://db-ip.com), license CC BY 4.0.
-# Published monthly; early in the month it may not be out yet, then use the previous month.
-SRC="https://download.db-ip.com/free/dbip-country-lite"
-CACHE=/var/cache/geowarden
-WORK=$(mktemp -d)
-trap 'rm -rf "$WORK"' EXIT
-mkdir -p "$CACHE"
+# Published monthly as CSV lines "start,end,COUNTRY".
+SOURCE = "https://download.db-ip.com/free/dbip-country-lite-{month}.csv.gz"
+MIN_LINES = 100000  # a complete file has far more lines; fewer means a broken download
 
-DB=""
-for m in "$(date +%Y-%m)" "$(date -d '-1 month' +%Y-%m)"; do
-	if [ -s "$CACHE/dbip-$m.csv.gz" ]; then DB="$CACHE/dbip-$m.csv.gz"; break; fi
-	if curl -fsS --retry 3 --max-time 300 "$SRC-$m.csv.gz" -o "$WORK/dl.csv.gz" \
-		&& gzip -t "$WORK/dl.csv.gz" \
-		&& [ "$(zcat "$WORK/dl.csv.gz" | wc -l)" -gt 100000 ]; then
-		mv "$WORK/dl.csv.gz" "$CACHE/dbip-$m.csv.gz"
-		DB="$CACHE/dbip-$m.csv.gz"
-		find "$CACHE" -name 'dbip-*.csv.gz' ! -name "dbip-$m.csv.gz" -delete
-		break
-	fi
-done
-[ -n "$DB" ] || { echo "Download failed - rules left unchanged" >&2; exit 1; }
+# IPv6 statistics count per /64 network
+V6NET = "ffff:ffff:ffff:ffff::"
 
-# CSV lines: start,end,COUNTRY -> nft range "start-end" (single address without "-",
-# older nft versions reject "a-a")
-: > "$WORK/all4"; : > "$WORK/all6"
-zcat "$DB" | awk -F, -v list="${COUNTRIES^^}" -v out="$WORK/all" '
-	BEGIN { n = split(list, c, " "); for (i = 1; i <= n; i++) ok[c[i]] = 1 }
-	ok[$3] { print ($1 == $2 ? $1 : $1 "-" $2) > (out (index($1, ":") ? "6" : "4")) }'
 
-n4=$(wc -l < "$WORK/all4"); n6=$(wc -l < "$WORK/all6")
-if [ -n "${COUNTRIES// /}" ] && [ $((n4 + n6)) -eq 0 ]; then
-	echo "No IP ranges found for the selected countries - rules left unchanged" >&2
-	exit 1
-fi
+class Error(Exception):
+    """Ends the script with a message; the current rules stay as they are."""
 
-elements() { [ -s "$1" ] && { echo " elements = {"; paste -sd, "$1"; echo " }"; }; true; }
-quoted() { local out="" i; for i in $1; do out+="${out:+, }\"$i\""; done; echo "$out"; }
 
-# Chain and allow sets. Requests that reach the country check are counted per source
-# address in dynamic sets (IPv6 per /64 network) for the statistics in the menu.
-V6NET="ffff:ffff:ffff:ffff::"
-{
-	echo "  set allow4 { type ipv4_addr; flags interval; auto-merge;"
-	elements "$WORK/all4"
-	echo "  }"
-	echo "  set allow6 { type ipv6_addr; flags interval; auto-merge;"
-	elements "$WORK/all6"
-	echo "  }"
-	echo "  chain prerouting {"
-	# priority -150: after conntrack (-200), before DNAT e.g. by Docker (-100)
-	echo "    type filter hook prerouting priority -150; policy accept;"
-	echo "    iifname != { $(quoted "$WAN_IF") } accept"
-	echo "    ct state established,related accept"
-	[ -n "${OPEN_TCP// /}" ] && echo "    tcp dport { ${OPEN_TCP// /, } } accept"
-	[ -n "${OPEN_UDP// /}" ] && echo "    udp dport { ${OPEN_UDP// /, } } accept"
-	echo "    udp sport 67 udp dport 68 accept"
-	echo "    ip6 saddr fe80::/10 accept"
-	echo "    icmpv6 type { nd-neighbor-solicit, nd-neighbor-advert, nd-router-advert } accept"
-	# Counting in rules of their own: a full set must never change the verdict
-	[ "$STATS_MAX" -gt 0 ] && echo "    ip saddr @allow4 update @stat_allow4 { ip saddr counter }"
-	echo "    ip saddr @allow4 counter name allowed accept"
-	[ "$STATS_MAX" -gt 0 ] && echo "    ip6 saddr @allow6 update @stat_allow6 { ip6 saddr and $V6NET counter }"
-	echo "    ip6 saddr @allow6 counter name allowed accept"
-	[ "$STATS_MAX" -gt 0 ] && echo "    meta nfproto ipv4 update @stat_block4 { ip saddr counter }"
-	[ "$STATS_MAX" -gt 0 ] && echo "    meta nfproto ipv6 update @stat_block6 { ip6 saddr and $V6NET counter }"
-	echo "    counter name blocked drop"
-	echo "  }"
-} > "$WORK/body.nft"
+# --- Configuration ----------------------------------------------------------------------
 
-# Daily reload: replace only the chain and the allow sets, so the statistics keep counting
-{
-	echo "add chain inet geowarden prerouting"
-	echo "delete chain inet geowarden prerouting"
-	echo "delete set inet geowarden allow4"
-	echo "delete set inet geowarden allow6"
-	echo "table inet geowarden {"
-	cat "$WORK/body.nft"
-	echo "}"
-} > "$WORK/keep.nft"
+def read_conf():
+    """Lines KEY="value", the same format the menu reads and writes."""
+    if not os.access(CONF, os.R_OK):
+        raise Error(f"{CONF} is missing")
+    with open(CONF) as f:
+        return dict(re.findall(r'^(\w+)="([^"]*)"', f.read(), re.M))
 
-# Otherwise (first start, after a reboot, older version) create the whole table anew
-{
-	echo "add table inet geowarden"
-	echo "delete table inet geowarden"
-	echo "table inet geowarden {"
-	if [ "$STATS_MAX" -gt 0 ]; then
-		for s in allow4 block4; do echo "  set stat_$s { type ipv4_addr; size $STATS_MAX; flags dynamic; }"; done
-		for s in allow6 block6; do echo "  set stat_$s { type ipv6_addr; size $STATS_MAX; flags dynamic; }"; done
-	fi
-	echo "  counter allowed { }"
-	echo "  counter blocked { }"
-	cat "$WORK/body.nft"
-	echo "}"
-} > "$WORK/new.nft"
 
-# The size of a set cannot be changed, so a new STATS_MAX also means a new table
-size=$(nft list set inet geowarden stat_block4 2>/dev/null | sed -n 's/^[[:space:]]*size \([0-9]*\).*/\1/p' || true)
-if [ "${size:-0}" = "$STATS_MAX" ] && { [ -s "$STATS" ] || [ "$STATS_MAX" = 0 ]; } \
-	&& nft -c -f "$WORK/keep.nft" 2>/dev/null; then
-	nft -f "$WORK/keep.nft"
-else
-	nft -c -f "$WORK/new.nft"
-	nft -f "$WORK/new.nft"
-	rm -f "$STATS"
-	if [ "$STATS_MAX" -gt 0 ]; then
-		mkdir -p "${STATS%/*}"
-		date +%s > "$STATS"
-	fi
-fi
-echo "geowarden: loaded $n4 IPv4 and $n6 IPv6 ranges ($(wc -w <<< "$COUNTRIES") countries, interface: $WAN_IF)"
+def words(conf, key, pattern, what):
+    """The space-separated values of a key, each checked against a pattern."""
+    values = conf.get(key, "").split()
+    for v in values:
+        if not re.fullmatch(pattern, v):
+            raise Error(f"{key} in {CONF}: {v!r} is not {what}")
+    return values
+
+
+def ports(conf, key):
+    """Port numbers or ranges like 8000-8100."""
+    values = words(conf, key, r"\d{1,5}(-\d{1,5})?", "a port or port range")
+    for v in values:
+        lo, _, hi = v.partition("-")
+        if not 1 <= int(lo) <= int(hi or lo) <= 65535:
+            raise Error(f"{key} in {CONF}: {v!r} is not a valid port or port range")
+    return values
+
+
+def default_route_ifaces():
+    """Interfaces of the default routes (IPv4 and IPv6)."""
+    found = set()
+    for family in ("-4", "-6"):
+        out = subprocess.run(["ip", family, "-o", "route", "show", "default"],
+                             capture_output=True, text=True).stdout
+        found.update(re.findall(r"\bdev (\S+)", out))
+    return sorted(found)
+
+
+# --- Geo data ---------------------------------------------------------------------------
+
+def nonempty(path):
+    return os.path.exists(path) and os.path.getsize(path) > 0
+
+
+def months():
+    """This month and the previous one: early in the month the new file may not be out yet."""
+    today = datetime.date.today()
+    last_month = today.replace(day=1) - datetime.timedelta(days=1)
+    return [today.strftime("%Y-%m"), last_month.strftime("%Y-%m")]
+
+
+def ip_int(text, version):
+    """Address as integer. inet_pton accepts only well-formed addresses of this family
+    and is much faster than ipaddress for the more than a million addresses."""
+    family = socket.AF_INET6 if version == 6 else socket.AF_INET
+    return int.from_bytes(socket.inet_pton(family, text), "big")
+
+
+def read_ranges(path, countries):
+    """Reads a DB-IP file and returns the ranges of the countries as (start, end) integers,
+    separately for IPv4 and IPv6. Every line is parsed, so a damaged file raises an error
+    instead of silently missing ranges."""
+    ranges = {4: [], 6: []}
+    lines = 0
+    try:
+        with gzip.open(path, "rt", newline="") as f:
+            for lines, row in enumerate(csv.reader(f), 1):
+                start, end, cc = row
+                version = 6 if ":" in start else 4
+                start, end = ip_int(start, version), ip_int(end, version)
+                if start > end:
+                    raise ValueError("start after end")
+                if cc.lower() in countries:
+                    ranges[version].append((start, end))
+    except (OSError, EOFError, ValueError) as e:
+        raise Error(f"{os.path.basename(path)}, line {lines}: {e}")
+    if lines < MIN_LINES:
+        raise Error(f"{os.path.basename(path)}: only {lines} lines")
+    return ranges
+
+
+def download(url, path):
+    """Downloads a file, with retries like curl --retry 3."""
+    request = urllib.request.Request(url, headers={"User-Agent": "geowarden"})
+    for attempt in range(4):
+        try:
+            with urllib.request.urlopen(request, timeout=60) as r, open(path, "wb") as f:
+                while True:
+                    chunk = r.read(1 << 16)
+                    if not chunk:
+                        return
+                    f.write(chunk)
+        except urllib.error.HTTPError as e:
+            if e.code < 500:  # e.g. 404: file of this month not published yet
+                raise Error(f"{url}: {e}")
+            error = e
+        except (OSError, http.client.HTTPException) as e:
+            error = e
+        time.sleep(2 ** attempt)
+    raise Error(f"{url}: {error}")
+
+
+def load_geo_data(countries):
+    """The ranges from the cached file of this (or last) month; downloads it if needed."""
+    os.makedirs(CACHE, exist_ok=True)
+    errors = []
+    for month in months():
+        cached = os.path.join(CACHE, f"dbip-{month}.csv.gz")
+        if nonempty(cached):
+            try:
+                return read_ranges(cached, countries)
+            except Error as e:
+                errors.append(str(e))
+                os.remove(cached)  # damaged, download it again
+        # Downloaded next to the cache file, so that replacing it stays on one file system
+        part = cached + ".part"
+        try:
+            download(SOURCE.format(month=month), part)
+            ranges = read_ranges(part, countries)
+        except Error as e:
+            errors.append(str(e))
+            if os.path.exists(part):
+                os.remove(part)
+            continue
+        os.replace(part, cached)
+        for name in os.listdir(CACHE):
+            if name.startswith("dbip-") and name.endswith(".csv.gz") and name != os.path.basename(cached):
+                os.remove(os.path.join(CACHE, name))
+        return ranges
+    raise Error("Download failed - rules left unchanged\n" + "\n".join(errors))
+
+
+def merge(ranges):
+    """Joins overlapping and adjacent ranges: neighbouring blocks of allowed countries
+    become one set element. That about halves the elements nft has to load."""
+    merged = []
+    for start, end in sorted(ranges):
+        if merged and start <= merged[-1][1] + 1:
+            merged[-1][1] = max(merged[-1][1], end)
+        else:
+            merged.append([start, end])
+    return merged
+
+
+def nft_elements(ranges, version):
+    """nft range "start-end", a single address without "-" (older nft rejects "a-a")."""
+    addr = ipaddress.IPv4Address if version == 4 else ipaddress.IPv6Address
+    return [str(addr(s)) if s == e else f"{addr(s)}-{addr(e)}" for s, e in ranges]
+
+
+# --- nftables ---------------------------------------------------------------------------
+
+def nft(*args, check=True):
+    r = subprocess.run(["nft", *args], capture_output=True, text=True)
+    if check and r.returncode != 0:
+        raise Error(f"nft {' '.join(args)} failed - rules left unchanged\n{r.stderr.strip()}")
+    return r
+
+
+def body(allow4, allow6, wan_if, open_tcp, open_udp, stats):
+    """Allow sets and the chain. Requests that reach the country check are counted per
+    source address in dynamic sets for the statistics in the menu."""
+    lines = []
+    for name, addr_type, elements in (("allow4", "ipv4_addr", allow4),
+                                      ("allow6", "ipv6_addr", allow6)):
+        lines.append(f"  set {name} {{ type {addr_type}; flags interval; auto-merge;")
+        if elements:
+            lines += [" elements = {", ",".join(elements), " }"]
+        lines.append("  }")
+
+    ifaces = ", ".join(f'"{i}"' for i in wan_if)
+    lines += [
+        "  chain prerouting {",
+        # priority -150: after conntrack (-200), before DNAT e.g. by Docker (-100)
+        "    type filter hook prerouting priority -150; policy accept;",
+        f"    iifname != {{ {ifaces} }} accept",
+        "    ct state established,related accept",
+    ]
+    if open_tcp:
+        lines.append(f"    tcp dport {{ {', '.join(open_tcp)} }} accept")
+    if open_udp:
+        lines.append(f"    udp dport {{ {', '.join(open_udp)} }} accept")
+    lines += [
+        "    udp sport 67 udp dport 68 accept",
+        "    ip6 saddr fe80::/10 accept",
+        "    icmpv6 type { nd-neighbor-solicit, nd-neighbor-advert, nd-router-advert } accept",
+    ]
+    # Counting in rules of their own: a full statistics set must never change the verdict
+    if stats:
+        lines.append("    ip saddr @allow4 update @stat_allow4 { ip saddr counter }")
+    lines.append("    ip saddr @allow4 counter name allowed accept")
+    if stats:
+        lines.append(f"    ip6 saddr @allow6 update @stat_allow6 {{ ip6 saddr and {V6NET} counter }}")
+    lines.append("    ip6 saddr @allow6 counter name allowed accept")
+    if stats:
+        lines.append("    meta nfproto ipv4 update @stat_block4 { ip saddr counter }")
+        lines.append(f"    meta nfproto ipv6 update @stat_block6 {{ ip6 saddr and {V6NET} counter }}")
+    lines += ["    counter name blocked drop", "  }"]
+    return lines
+
+
+def keep_ruleset(body_lines):
+    """Daily reload: replaces only the chain and the allow sets, so the statistics keep
+    counting. "add" before "delete" makes the delete work even if the object is missing."""
+    return [
+        f"add chain {TABLE} prerouting",
+        f"delete chain {TABLE} prerouting",
+        f"delete set {TABLE} allow4",
+        f"delete set {TABLE} allow6",
+        f"table {TABLE} {{",
+        *body_lines,
+        "}",
+    ]
+
+
+def new_ruleset(body_lines, stats_max):
+    """First start, after a reboot or an older version: the whole table anew."""
+    lines = [f"add table {TABLE}", f"delete table {TABLE}", f"table {TABLE} {{"]
+    if stats_max:
+        for name, addr_type in (("allow4", "ipv4_addr"), ("block4", "ipv4_addr"),
+                                ("allow6", "ipv6_addr"), ("block6", "ipv6_addr")):
+            lines.append(f"  set stat_{name} {{ type {addr_type}; size {stats_max}; flags dynamic; }}")
+    lines += ["  counter allowed { }", "  counter blocked { }", *body_lines, "}"]
+    return lines
+
+
+def loaded_stats_size():
+    """Size of the loaded statistics sets, 0 if there are none."""
+    out = nft("list", "set", *TABLE.split(), "stat_block4", check=False).stdout
+    m = re.search(r"^\s*size (\d+)", out, re.M)
+    return int(m.group(1)) if m else 0
+
+
+def write(path, lines):
+    with open(path, "w") as f:
+        f.write("\n".join(lines) + "\n")
+    return path
+
+
+# --- Main -------------------------------------------------------------------------------
+
+def turn_off():
+    nft("delete", "table", *TABLE.split(), check=False)
+    if os.path.exists(STATS_SINCE):
+        os.remove(STATS_SINCE)
+    print("geowarden: blocking turned off")
+
+
+def apply(conf, workdir):
+    countries = set(words(conf, "COUNTRIES", r"[A-Za-z]{2}", "a two-letter country code"))
+    countries = {c.lower() for c in countries}
+    wan_if = words(conf, "WAN_IF", r"[\w.:@+*-]{1,15}", "an interface name") or default_route_ifaces()
+    if not wan_if:
+        raise Error(f"No public interface found - please set WAN_IF in {CONF}")
+    open_tcp, open_udp = ports(conf, "OPEN_TCP"), ports(conf, "OPEN_UDP")
+    stats_max = conf.get("STATS_MAX", "10000")  # older configurations have no STATS_MAX
+    if not stats_max.isdigit():
+        raise Error(f"STATS_MAX in {CONF} must be a number")
+    stats_max = int(stats_max)
+
+    ranges = load_geo_data(countries)
+    allow4 = nft_elements(merge(ranges[4]), 4)
+    allow6 = nft_elements(merge(ranges[6]), 6)
+    if countries and not allow4 and not allow6:
+        raise Error("No IP ranges found for the selected countries - rules left unchanged")
+
+    body_lines = body(allow4, allow6, wan_if, open_tcp, open_udp, stats_max > 0)
+    keep = write(os.path.join(workdir, "keep.nft"), keep_ruleset(body_lines))
+    new = write(os.path.join(workdir, "new.nft"), new_ruleset(body_lines, stats_max))
+
+    # The size of a set cannot be changed, so a new STATS_MAX also means a new table.
+    # Without the start time (after a reboot) the statistics start over as well.
+    if (loaded_stats_size() == stats_max and (nonempty(STATS_SINCE) or stats_max == 0)
+            and nft("-c", "-f", keep, check=False).returncode == 0):
+        nft("-f", keep)
+    else:
+        nft("-c", "-f", new)
+        nft("-f", new)
+        if os.path.exists(STATS_SINCE):
+            os.remove(STATS_SINCE)
+        if stats_max:
+            os.makedirs(os.path.dirname(STATS_SINCE), exist_ok=True)
+            with open(STATS_SINCE, "w") as f:
+                f.write(f"{int(time.time())}\n")
+
+    print(f"geowarden: loaded {len(allow4)} IPv4 and {len(allow6)} IPv6 ranges "
+          f"({len(countries)} countries, interface: {' '.join(wan_if)})")
+
+
+def main():
+    try:
+        conf = read_conf()
+        if conf.get("ENABLED", "no") != "yes":
+            turn_off()
+            return
+        with tempfile.TemporaryDirectory() as workdir:
+            apply(conf, workdir)
+    except Error as e:
+        sys.exit(f"geowarden: {e}")
+
+
+if __name__ == "__main__":
+    main()
