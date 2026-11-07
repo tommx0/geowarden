@@ -12,6 +12,8 @@ geowarden (1.4.0) stable; urgency=medium
     downloaded again.
   * The settings in /etc/geowarden.conf are checked (country codes,
     interfaces, ports, STATS_MAX) before any rule is changed.
+  * The menu shows version, year, author, license and project page at the
+    top of every dialog.
 
  -- Thomas Marx <103289949+tommx0@users.noreply.github.com>  Sat, 07 Nov 2026 12:00:00 +0000
 

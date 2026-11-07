@@ -25,6 +25,10 @@ STATS_SINCE = "/run/geowarden/stats-since"
 STAT_SETS = ("stat_allow4", "stat_allow6", "stat_block4", "stat_block6")
 WORLDMAP = "/usr/share/geowarden/worldmap.txt"
 TITLE = "geowarden"
+# Filled in by build.sh from debian/changelog
+VERSION = "@VERSION@"
+YEAR = "@YEAR@"
+URL = "https://github.com/tommx0/geowarden"
 
 # 256-color palette for the map and the top 10 bars
 RED = (124, 160, 196)     # blocked requests, few -> many
@@ -309,9 +313,17 @@ def sortkey(name):
     return unicodedata.normalize("NFD", name).encode("ascii", "ignore").decode().lower()
 
 
+def backtitle():
+    """Shown on top of every dialog: version, copyright, license and project page."""
+    version = "" if VERSION.startswith("@") else f" {VERSION}"
+    year = "" if YEAR.startswith("@") else f" {YEAR}"
+    return f"geowarden{version} | (c){year} Thomas Marx | MIT | {URL.split('//')[1]}"
+
+
 def whiptail(*args):
     """Runs whiptail; returns (ok, selection)."""
-    r = subprocess.run(["whiptail", "--title", TITLE, *args], stderr=subprocess.PIPE, text=True)
+    r = subprocess.run(["whiptail", "--backtitle", backtitle(), "--title", TITLE, *args],
+                       stderr=subprocess.PIPE, text=True)
     return r.returncode == 0, r.stderr.strip()
 
 
