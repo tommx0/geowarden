@@ -314,13 +314,12 @@ def apply(conf, workdir):
     keep = write(os.path.join(workdir, "keep.nft"), keep_ruleset(body_lines))
     new = write(os.path.join(workdir, "new.nft"), new_ruleset(body_lines, stats_max))
 
+    # nft -f loads a file as one transaction: if anything in it fails, nothing changes.
+    # So the small update can simply be tried, and the whole table is the fallback.
     # The size of a set cannot be changed, so a new STATS_MAX also means a new table.
     # Without the start time (after a reboot) the statistics start over as well.
-    if (loaded_stats_size() == stats_max and (nonempty(STATS_SINCE) or stats_max == 0)
-            and nft("-c", "-f", keep, check=False).returncode == 0):
-        nft("-f", keep)
-    else:
-        nft("-c", "-f", new)
+    if not (loaded_stats_size() == stats_max and (nonempty(STATS_SINCE) or stats_max == 0)
+            and nft("-f", keep, check=False).returncode == 0):
         nft("-f", new)
         if os.path.exists(STATS_SINCE):
             os.remove(STATS_SINCE)

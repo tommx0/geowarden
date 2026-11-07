@@ -5,6 +5,9 @@ geowarden (1.4.0) stable; urgency=medium
   * Neighbouring IP ranges of allowed countries are joined before loading:
     about half as many ranges for nft to load, so the daily reload is faster.
     The rules in the kernel stay the same.
+  * nft loads the rules once instead of checking them with "nft -c" first:
+    "nft -f" is a single transaction that changes nothing if it fails, so
+    the check did the same work twice.
   * Every line of the geo data is checked; a damaged cached file is
     downloaded again.
   * The settings in /etc/geowarden.conf are checked (country codes,
