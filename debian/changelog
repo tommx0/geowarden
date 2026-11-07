@@ -1,3 +1,19 @@
+geowarden (1.6.0) stable; urgency=medium
+
+  * Blocked networks (BLOCK_NETS): networks or addresses that are always
+    blocked, whatever their country. Managed in the new menu entry
+    "Blocked networks", or straight from "Top 10 addresses" and the new
+    statistics page "Suspicious networks".
+  * BLOCK_NETS_OPEN_PORTS chooses whether blocked networks may still use
+    the open ports (default: blocked there too).
+  * Scanner hint: networks that send requests from many different addresses
+    are marked as suspected scanners in the top 10, the new page and the
+    live view (IPv4: 8 or more addresses in a /24 or 12 or more in a /22,
+    IPv6: 8 or more in a /48).
+  * The menu warns before blocking the network of the own SSH connection.
+
+ -- Thomas Marx <103289949+tommx0@users.noreply.github.com>  Sat, 07 Nov 2026 14:00:00 +0000
+
 geowarden (1.5.0) stable; urgency=medium
 
   * Live view in the menu: the country of each new request blinks on the

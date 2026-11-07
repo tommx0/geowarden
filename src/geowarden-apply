@@ -72,6 +72,29 @@ def ports(conf, key):
     return values
 
 
+def networks(conf, key):
+    """Networks or single addresses such as 109.196.32.0/21, 203.0.113.7 or 2001:db8::/32,
+    per IP version. Host bits are cleared (109.196.36.1/21 becomes 109.196.32.0/21) and
+    overlapping entries are joined, so the set gets no overlapping elements."""
+    found = {4: [], 6: []}
+    for v in conf.get(key, "").split():
+        try:
+            net = ipaddress.ip_network(v, strict=False)
+        except ValueError:
+            raise Error(f"{key} in {CONF}: {v!r} is not a network or address")
+        found[net.version].append(net)
+    return {version: [str(n) for n in ipaddress.collapse_addresses(nets)]
+            for version, nets in found.items()}
+
+
+def yes_no(conf, key, default):
+    """A yes/no setting; default if the key is missing (older configurations)."""
+    value = conf.get(key, default)
+    if value not in ("yes", "no"):
+        raise Error(f"{key} in {CONF} must be \"yes\" or \"no\"")
+    return value == "yes"
+
+
 def default_route_ifaces():
     """Interfaces of the default routes (IPv4 and IPv6)."""
     found = set()
@@ -213,7 +236,7 @@ def nft(*args, check=True):
     return r
 
 
-def body(allow4, allow6, wan_if, open_tcp, open_udp, stats):
+def body(allow4, allow6, deny4, deny6, block_open_ports, wan_if, open_tcp, open_udp, stats):
     """Allow sets and the chain. Requests that reach the country check are counted per
     source address in dynamic sets for the statistics in the menu.
 
@@ -224,6 +247,13 @@ def body(allow4, allow6, wan_if, open_tcp, open_udp, stats):
     for name, addr_type, elements in (("allow4", "ipv4_addr", allow4),
                                       ("allow6", "ipv6_addr", allow6)):
         lines.append(f"  set {name} {{ type {addr_type}; flags interval; auto-merge;")
+        if elements:
+            lines += [" elements = {", ",".join(elements), " }"]
+        lines.append("  }")
+    # Blocked networks (BLOCK_NETS): already joined, so no auto-merge needed. The same
+    # definition is used in keep_ruleset, which must match it exactly.
+    for name, addr_type, elements in (("deny4", "ipv4_addr", deny4), ("deny6", "ipv6_addr", deny6)):
+        lines.append(f"  set {name} {{ type {addr_type}; flags interval;")
         if elements:
             lines += [" elements = {", ",".join(elements), " }"]
         lines.append("  }")
@@ -240,18 +270,33 @@ def body(allow4, allow6, wan_if, open_tcp, open_udp, stats):
         # connections are checked, so an open SSH session is never cut off
         "    ct state established,related accept",
     ]
-    # Ports open worldwide (OPEN_TCP / OPEN_UDP)
-    if open_tcp:
-        lines.append(f"    tcp dport {{ {', '.join(open_tcp)} }} accept")
-    if open_udp:
-        lines.append(f"    udp dport {{ {', '.join(open_udp)} }} accept")
-    # Traffic the server needs to keep its own network working
+    # Traffic the server needs to keep its own network working. It comes first, so that
+    # not even a blocked network can cut the server off from its router.
     lines += [
         "    udp sport 67 udp dport 68 accept",  # DHCP replies from the provider
         "    ip6 saddr fe80::/10 accept",        # IPv6 link-local (router, neighbours)
         # IPv6 neighbour discovery and router adverts (address and default route)
         "    icmpv6 type { nd-neighbor-solicit, nd-neighbor-advert, nd-router-advert } accept",
     ]
+    # Blocked networks are dropped whatever their country. They count as blocked requests,
+    # so they show up in the statistics and the live view like any other block.
+    deny = []
+    if stats:
+        deny.append("    ip saddr @deny4 update @stat_block4 { ip saddr counter }")
+    deny.append("    ip saddr @deny4 counter name blocked drop")
+    if stats:
+        deny.append(f"    ip6 saddr @deny6 update @stat_block6 {{ ip6 saddr and {V6NET} counter }}")
+    deny.append("    ip6 saddr @deny6 counter name blocked drop")
+    # BLOCK_NETS_OPEN_PORTS="yes": before the open ports, so they are closed for them too
+    if block_open_ports:
+        lines += deny
+    # Ports open worldwide (OPEN_TCP / OPEN_UDP)
+    if open_tcp:
+        lines.append(f"    tcp dport {{ {', '.join(open_tcp)} }} accept")
+    if open_udp:
+        lines.append(f"    udp dport {{ {', '.join(open_udp)} }} accept")
+    if not block_open_ports:
+        lines += deny
     # The country check: source in an allow set -> accept, everything else -> drop.
     # "counter name ..." adds to the named counters allowed/blocked (totals in the menu).
     # Counting in rules of their own: a full statistics set must never change the verdict.
@@ -271,13 +316,18 @@ def body(allow4, allow6, wan_if, open_tcp, open_udp, stats):
 
 
 def keep_ruleset(body_lines):
-    """Daily reload: replaces only the chain and the allow sets, so the statistics keep
-    counting. "add" before "delete" makes the delete work even if the object is missing."""
+    """Daily reload: replaces only the chain, the allow sets and the blocked networks, so
+    the statistics keep counting. "add" before "delete" makes the delete work even if the
+    object is missing, e.g. the deny sets after an upgrade from a version without them."""
     return [
         f"add chain {TABLE} prerouting",
         f"delete chain {TABLE} prerouting",
         f"delete set {TABLE} allow4",
         f"delete set {TABLE} allow6",
+        f"add set {TABLE} deny4 {{ type ipv4_addr; flags interval; }}",
+        f"delete set {TABLE} deny4",
+        f"add set {TABLE} deny6 {{ type ipv6_addr; flags interval; }}",
+        f"delete set {TABLE} deny6",
         f"table {TABLE} {{",
         *body_lines,
         "}",
@@ -336,6 +386,8 @@ def apply(conf, workdir):
     if not stats_max.isdigit():
         raise Error(f"STATS_MAX in {CONF} must be a number")
     stats_max = int(stats_max)
+    deny = networks(conf, "BLOCK_NETS")
+    block_open_ports = yes_no(conf, "BLOCK_NETS_OPEN_PORTS", "yes")
 
     # Geo data -> merged ranges -> nft element strings
     ranges = load_geo_data(countries)
@@ -345,7 +397,8 @@ def apply(conf, workdir):
         raise Error("No IP ranges found for the selected countries - rules left unchanged")
 
     # Both variants are prepared; which one is loaded is decided below
-    body_lines = body(allow4, allow6, wan_if, open_tcp, open_udp, stats_max > 0)
+    body_lines = body(allow4, allow6, deny[4], deny[6], block_open_ports,
+                      wan_if, open_tcp, open_udp, stats_max > 0)
     keep = write(os.path.join(workdir, "keep.nft"), keep_ruleset(body_lines))
     new = write(os.path.join(workdir, "new.nft"), new_ruleset(body_lines, stats_max))
 
@@ -364,8 +417,10 @@ def apply(conf, workdir):
             with open(STATS_SINCE, "w") as f:
                 f.write(f"{int(time.time())}\n")
 
+    blocked = len(deny[4]) + len(deny[6])
     print(f"geowarden: loaded {len(allow4)} IPv4 and {len(allow6)} IPv6 ranges "
-          f"({len(countries)} countries, interface: {' '.join(wan_if)})")
+          f"({len(countries)} countries, interface: {' '.join(wan_if)})"
+          + (f", {blocked} blocked network{'s' if blocked != 1 else ''}" if blocked else ""))
 
 
 def main():

@@ -26,6 +26,7 @@ Everything else is dropped before it reaches SSH, your web server or your Docker
 - **Fails safe.** A failed download or a broken data file leaves the current rules in place. Rules are swapped in a single atomic nftables transaction.
 - **Leaves other firewalls alone.** geowarden only manages its own table (`inet geowarden`). Docker, ufw, CrowdSec and others are not touched.
 - **IPv4 and IPv6.** Both address families are filtered.
+- **Block single networks.** Keep a list of networks or addresses that are always blocked, whatever their country, for example a scanner farm from an otherwise allowed country. Block them from the statistics with a few keystrokes.
 - **See who is knocking.** A colored world map and top 10 lists show allowed and blocked requests by country and by address. You can see when counting started and reset the statistics at any time.
 - **Live view.** Watch requests as they come in: the country of each new request blinks on the world map, and the last 10 requests are listed with time, address and country.
 
@@ -143,7 +144,8 @@ Open **Statistics and world map** in the menu. The screen shows when counting st
 |---|---|
 | **World map** | Every country colored by its requests: red for blocked, green for allowed. Brighter means more requests. Countries without requests stay muted. |
 | **Top 10 countries** | The ten countries with the most allowed and the most blocked requests, side by side. Type a country code (e.g. `cn`) to see the top 10 addresses of that country and their share of its requests. |
-| **Top 10 addresses** | The ten source addresses with the most allowed and the most blocked requests (IPv6 grouped by /64 network) |
+| **Top 10 addresses** | The ten source addresses with the most allowed and the most blocked requests (IPv6 grouped by /64 network). `!` marks a suspected scanner, `x` an address in the blocked networks. Type an address to block its network. |
+| **Suspicious networks** | Networks that sent requests from many different addresses (IPv4: 8 or more in a /24, or 12 or more in a /22; IPv6: 8 or more in a /48), with their allowed and blocked requests. Type a number to block that network. See [Blocked networks](#blocked-networks). |
 | **Reset statistics** | Clears all counters. Counting starts again from that moment. |
 
 Good to know:
@@ -153,15 +155,26 @@ Good to know:
 - Each of the four lists (IPv4 and IPv6, allowed and blocked) keeps up to `STATS_MAX` addresses, 10,000 by default. One address needs about 160 to 280 bytes of kernel memory depending on the number of CPUs, so the default uses at most about 6 to 11 MB. If a list is full, new addresses still count in the totals, and the views tell you how many requests they cannot place. The busiest addresses are usually listed early, so the top 10 stay meaningful.
 - The map needs a terminal with 256 colors and at least 44×16 characters. A wider terminal gives a more detailed map.
 
+### Blocked networks
+
+Open **Blocked networks** in the menu to keep a list of networks or single addresses that are always blocked, whatever their country (`BLOCK_NETS`). Use it for a scanner network in a country you otherwise allow, instead of blocking the whole country. You can add entries by hand (e.g. `109.196.32.0/21`, `203.0.113.7` or `2001:db8::/32`), or straight from **Top 10 addresses** and **Suspicious networks**. Then the menu suggests the suspicious network of the address, or else its /24 (IPv6 /48), and you can widen or narrow it before you confirm.
+
+- Existing connections stay open. Only new connections from a blocked network are dropped.
+- By default they are blocked on the open ports (`OPEN_TCP`, `OPEN_UDP`) too. Set **Open ports** in the same menu to *still open to them* (`BLOCK_NETS_OPEN_PORTS="no"`) if they should keep reaching e.g. tcp/80.
+- Their requests count as blocked in the statistics and the live view.
+- The menu warns before you block the network of your own SSH connection, and asks again for very large networks.
+
+**Scanner suspected.** geowarden only sees connection attempts, not what a client does afterwards, so it can only give a hint. It flags networks that send requests from many different addresses: 8 or more in an IPv4 /24 or IPv6 /48, or 12 or more in an IPv4 /22. The /22 level catches scanners that spread over a whole block with only a few addresses per /24. Scan farms rotate through the addresses of their block like that, while normal visitors rarely come from that many addresses of one network. Many real users behind one provider can look the same, so geowarden never blocks on its own: it only marks such networks in **Top 10 addresses**, **Suspicious networks** and the live view. If your web server logs requests, compare them with the hint. A network that keeps connecting but never shows up in the web server's access log is a scanner.
+
 ### Live view
 
-Open **Live view** in the menu to watch requests as they arrive. Every second the menu reads the statistics again: the country of each new request blinks on the map for three seconds (red and white for blocked, green and white for allowed), and the last 10 requests are listed below with time, result, address, country and how many requests came in that second. Press `q`, Enter or Esc to go back.
+Open **Live view** in the menu to watch requests as they arrive. Every second the menu reads the statistics again: the country of each new request blinks on the map for three seconds (red and white for blocked, green and white for allowed), and the last 10 requests are listed below with time, result, address, country and how many requests came in that second. `scanner?` marks a suspected scanner network and `listed` an address in the blocked networks. Press `q`, Enter or Esc to go back.
 
 The live view only runs while it is open and does not change the rules. It shows only what the statistics count, so it needs `STATS_MAX` above 0, and addresses that no longer fit into a full list do not appear. It needs a terminal of at least 44×21 characters.
 
 ### Configuration
 
-All settings live in `/etc/geowarden.conf`. The menu edits `ENABLED` and `COUNTRIES` for you. Edit the others by hand, then reload the rules.
+All settings live in `/etc/geowarden.conf`. The menu edits `ENABLED`, `COUNTRIES`, `BLOCK_NETS` and `BLOCK_NETS_OPEN_PORTS` for you. Edit the others by hand, then reload the rules.
 
 | Variable | Meaning | Default |
 |---|---|---|
@@ -170,6 +183,8 @@ All settings live in `/etc/geowarden.conf`. The menu edits `ENABLED` and `COUNTR
 | `WAN_IF` | Interfaces to filter. Empty means the interfaces of the default routes | empty |
 | `OPEN_TCP` | TCP ports open to the whole world | `80` (Let's Encrypt HTTP-01) |
 | `OPEN_UDP` | UDP ports open to the whole world | `41641` (Tailscale) |
+| `BLOCK_NETS` | Networks or addresses that are always blocked, whatever their country, separated by spaces | empty |
+| `BLOCK_NETS_OPEN_PORTS` | Block those networks on the open ports too (`yes`) or not (`no`) | `yes` |
 | `STATS_MAX` | Most addresses per statistics list. `0` turns the statistics off. A change starts the statistics over | `10000` |
 
 Example:
@@ -202,14 +217,16 @@ flowchart LR
     D --> E[Host services and containers]
 ```
 
-These are always accepted:
+Networks in `BLOCK_NETS` are dropped before the country check, so they stay blocked even if their country is allowed. With `BLOCK_NETS_OPEN_PORTS="yes"` (default) this also happens before the open ports.
+
+These are always accepted (except from blocked networks, as described above):
 
 - packets on interfaces other than the filtered ones (VPN, Docker bridges, `lo`)
 - established and related connections
 - the ports in `OPEN_TCP` and `OPEN_UDP`
 - DHCP replies, IPv6 link-local traffic and IPv6 neighbor discovery
 
-Every request that reaches the country check is counted per source address in dynamic nftables sets (`stat_allow4`, `stat_block4`, `stat_allow6`, `stat_block6`). The menu looks up the country of each address in the cached DB-IP file when you open the statistics. The daily reload replaces only the rule chain and the allowlist, so the counters keep running.
+Every request that reaches the country check is counted per source address in dynamic nftables sets (`stat_allow4`, `stat_block4`, `stat_allow6`, `stat_block6`). The menu looks up the country of each address in the cached DB-IP file when you open the statistics. The daily reload replaces only the rule chain, the allowlist and the blocked networks, so the counters keep running.
 
 ## Uninstall
 
