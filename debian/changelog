@@ -1,3 +1,11 @@
+geowarden (1.5.0) stable; urgency=medium
+
+  * Live view in the menu: the country of each new request blinks on the
+    world map, and the last 10 requests are listed as they come in. It only
+    runs while it is open and reads the existing statistics.
+
+ -- Thomas Marx <103289949+tommx0@users.noreply.github.com>  Sat, 07 Nov 2026 13:00:00 +0000
+
 geowarden (1.4.0) stable; urgency=medium
 
   * geowarden-apply is now written in Python, like the menu (#1). bash, curl
