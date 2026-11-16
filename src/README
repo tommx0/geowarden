@@ -10,6 +10,7 @@ Menu:           geowarden                          (as root)
 Configuration:  /etc/geowarden.conf
 Apply:          systemctl start geowarden.service  (or /usr/sbin/geowarden-apply)
 Kill switch:    nft delete table inet geowarden    (until the next timer run)
+Interfaces:     geowarden -> Filtered interfaces (default: those of the default routes)
 Statistics:     geowarden -> Statistics and world map (start over after a reboot)
 Updates:        geowarden.timer, at boot and daily
 Geo data:       /var/cache/geowarden, monthly from DB-IP

@@ -474,11 +474,34 @@ def counter(name):
     return int(m.group(1)) if m else 0
 
 
-def wan_ifaces():
-    """Filtered interfaces: WAN_IF from the config, otherwise those of the default routes."""
-    conf = read_conf()[1].get("WAN_IF", "").split()
-    if conf:
-        return conf
+def loaded_ifaces():
+    """Interfaces the loaded rules filter, None if no rules are loaded."""
+    r = subprocess.run(["nft", "list", "chain", "inet", "geowarden", "prerouting"],
+                       capture_output=True, text=True)
+    if r.returncode != 0:
+        return None
+    # The first rule is 'iifname != { "eth0", "ens3" } accept', or 'iifname != "eth0" accept'
+    # when there is only one
+    m = re.search(r'iifname != (\{[^}]*\}|"[^"]*")', r.stdout)
+    return sorted(re.findall(r'"([^"]+)"', m.group(1))) if m else []
+
+
+# --- Interfaces ---------------------------------------------------------------
+# Only new connections on the public interfaces (WAN_IF, or those of the default routes)
+# are checked. The menu lists the interfaces to choose from and warns about public
+# addresses on interfaces that are not filtered.
+
+# Docker creates a bridge per network and a veth pair per container. Traffic from the
+# internet to a container comes in on the public interface and is filtered there, so
+# they are left out of the lists.
+DOCKER_IF = re.compile(r"veth.*|docker\d+|br-[0-9a-f]{12}")
+# VPN interfaces (WireGuard; Tailscale and OpenVPN use tun) are unfiltered on purpose,
+# also when they carry a public address, so they get no warning
+VPN_KINDS = ("wireguard", "tun")
+
+
+def default_route_ifaces():
+    """Interfaces of the default routes (IPv4 and IPv6), the same as geowarden-apply."""
     found = []
     for fam in ("-4", "-6"):
         out = subprocess.run(["ip", fam, "-o", "route", "show", "default"],
@@ -487,35 +510,130 @@ def wan_ifaces():
     return sorted(set(found))
 
 
+def wan_ifaces():
+    """Interfaces to filter: WAN_IF from the config, otherwise those of the default routes."""
+    return sorted(read_conf()[1].get("WAN_IF", "").split()) or default_route_ifaces()
+
+
+def filtered_ifaces():
+    """Interfaces filtered right now: those of the loaded rules, otherwise (blocking off)
+    those that would be filtered."""
+    loaded = loaded_ifaces()
+    return wan_ifaces() if loaded is None else loaded
+
+
+def iface_matches(name, patterns):
+    """True if the interface is one of the names; nft also takes "eth*" for every name
+    starting with "eth"."""
+    return any(name == p or (p.endswith("*") and name.startswith(p[:-1])) for p in patterns)
+
+
+def interfaces(keep=()):
+    """{name: (kind, addresses)} of the network interfaces that are up, except lo and
+    Docker's; those in keep also when they are down. kind is e.g. "wireguard", "tun" or
+    "bridge", "" for a plain network card; the addresses are those of scope global (no
+    link-local). Interfaces that are down, like the kernel's tunnel devices sit0 or gre0,
+    receive nothing."""
+    r = subprocess.run(["ip", "-j", "-d", "addr", "show"], capture_output=True, text=True)
+    try:
+        links = json.loads(r.stdout or "[]")
+    except ValueError:
+        return {}
+    found = {}
+    for link in links:
+        name = link.get("ifname", "")
+        if not name or name == "lo" or DOCKER_IF.fullmatch(name):
+            continue
+        if "UP" not in link.get("flags", []) and name not in keep:
+            continue
+        kind = link.get("linkinfo", {}).get("info_kind", "")
+        addrs = [a["local"] for a in link.get("addr_info", [])
+                 if a.get("local") and a.get("scope") == "global"]
+        found[name] = (kind, addrs)
+    return found
+
+
+def public(addrs):
+    """The addresses reachable from the internet: no private, CGNAT (Tailscale's 100.64/10),
+    ULA (fd00::/8) or documentation addresses."""
+    found = []
+    for a in addrs:
+        try:
+            if ipaddress.ip_address(a).is_global:
+                found.append(a)
+        except ValueError:
+            pass
+    return found
+
+
+def unfiltered_public(filtered):
+    """{interface: public addresses} of the interfaces that are not in filtered but have a
+    public address, VPN interfaces excepted."""
+    return {name: public(addrs) for name, (kind, addrs) in interfaces().items()
+            if kind not in VPN_KINDS and public(addrs) and not iface_matches(name, filtered)}
+
+
+def unfiltered_warning(filtered):
+    """Warning lines for public interfaces outside filtered, "" if there are none."""
+    return "".join(f"\nWARNING: {name} has the public address {addrs[0]} but is not filtered."
+                   for name, addrs in sorted(unfiltered_public(filtered).items()))
+
+
+def iface_summary():
+    """The interfaces to filter for the menus, e.g. "eth0 (automatic)". If the loaded rules
+    use others (e.g. the default route changed since they were loaded), they are named too."""
+    wanted = wan_ifaces()
+    mode = "chosen" if read_conf()[1].get("WAN_IF", "").split() else "automatic"
+    text = f"{' '.join(wanted) or 'none found'} ({mode})"
+    loaded = loaded_ifaces()
+    if loaded is not None and loaded != wanted:
+        text += f", loaded rules: {' '.join(loaded) or '-'}"
+    return text
+
+
+def ssh_client():
+    """Address of our own SSH client, "" when not logged in via SSH."""
+    # SSH_CLIENT is "client-ip client-port server-port"
+    return os.environ.get("SSH_CLIENT", "").split(" ")[0]
+
+
+def route_dev(addr):
+    """The interface the server reaches an address through, "" if there is no route.
+    Replies to a client leave through the interface it came in on."""
+    route = subprocess.run(["ip", "route", "get", addr], capture_output=True, text=True).stdout
+    m = re.search(r"\bdev (\S+)", route)
+    return m.group(1) if m else ""
+
+
 def filtered_ssh_client():
     """Address of our own SSH client if its connection comes in via a filtered interface,
     otherwise "" (not logged in via SSH, or e.g. via Tailscale or the LAN)."""
-    # SSH_CLIENT is "client-ip client-port server-port"; empty when not logged in via SSH
-    client = os.environ.get("SSH_CLIENT", "").split(" ")[0]
-    if not client:
+    client = ssh_client()
+    return client if client and iface_matches(route_dev(client), filtered_ifaces()) else ""
+
+
+def ssh_block_reason(client):
+    """Why the loaded rules would block a new connection from the address, "" if they
+    would not (or no rules are loaded)."""
+    if not table_loaded():
         return ""
-    # Replies to the client leave through the interface it came in on. If that is not a
-    # filtered one, the rules don't apply to this connection.
-    route = subprocess.run(["ip", "route", "get", client], capture_output=True, text=True).stdout
-    return client if any(f"dev {w} " in route for w in wan_ifaces()) else ""
+    if in_networks(client, blocked_nets()):
+        return f"Your SSH address {client} is in a blocked network."
+    # "nft get element" fails if the address is in none of the ranges of the allow set
+    setname = "allow6" if ":" in client else "allow4"
+    r = subprocess.run(["nft", "get", "element", "inet", "geowarden", setname, f"{{ {client} }}"],
+                       capture_output=True)
+    return f"Your SSH address {client} is not allowed." if r.returncode != 0 else ""
 
 
 def ssh_warning():
     """Warns if our own SSH connection comes in via a public interface and is not allowed."""
     client = filtered_ssh_client()
-    if not client or not table_loaded():
+    reason = ssh_block_reason(client) if client else ""
+    if not reason:
         return ""
-    if in_networks(client, blocked_nets()):
-        return (f"\n\nWARNING: Your SSH address {client} is in a blocked network. The current "
-                "connection stays open, but a new one will be blocked!")
-    # "nft get element" fails if the address is in none of the ranges of the allow set
-    setname = "allow6" if ":" in client else "allow4"
-    r = subprocess.run(["nft", "get", "element", "inet", "geowarden", setname, f"{{ {client} }}"],
-                       capture_output=True)
-    if r.returncode != 0:
-        return (f"\n\nWARNING: Your SSH address {client} is not allowed. The current "
-                "connection stays open, but a new one will be blocked!")
-    return ""
+    return (f"\n\nWARNING: {reason} The current connection stays open, "
+            "but a new one will be blocked!")
 
 
 # --- Menu actions -------------------------------------------------------------
@@ -529,7 +647,8 @@ def apply():
     if r.returncode != 0:
         msg(f"Applying failed, the previous rules stay active:\n\n{out}", 14, 76)
     else:
-        msg(out + ssh_warning(), 12, 76)
+        warn = unfiltered_warning(filtered_ifaces()) if table_loaded() else ""
+        msg(out + ssh_warning() + ("\n" + warn if warn else ""), 12 + warn.count("\n"), 76)
 
 
 def set_countries(codes):
@@ -631,6 +750,93 @@ def edit_blocked_nets():
                 set_blocked_nets([n for n in nets if n != v])
 
 
+def set_wan_if(chosen):
+    """Saves WAN_IF (empty = automatic) and applies it if blocking is on. Asks first if a
+    public interface would stay unfiltered or our own SSH connection would be blocked."""
+    new = sorted(chosen) or default_route_ifaces()
+    if not new:
+        msg("No default route found, so there is no interface to filter automatically. "
+            "Choose the interfaces yourself.", 9, 64)
+        return
+    warn = unfiltered_warning(new)
+    if warn:
+        ok, _ = whiptail("--defaultno", "--yesno",
+                         warn.strip() + "\n\nNew connections to it would not be checked. "
+                         "Save anyway?", str(10 + warn.count("\n")), "76")
+        if not ok:
+            return
+    # Our SSH connection may come in on an interface that was unfiltered until now
+    client = ssh_client()
+    dev = route_dev(client) if client else ""
+    if dev and enabled() and iface_matches(dev, new) and not iface_matches(dev, filtered_ifaces()):
+        reason = ssh_block_reason(client)
+        if reason:
+            ok, _ = whiptail("--defaultno", "--yesno",
+                             f"WARNING: Your SSH connection comes in on {dev}, which would then be "
+                             f"filtered. {reason} The current connection stays open, but new SSH "
+                             "connections from it will be blocked.\n\nSave anyway?", "12", "70")
+            if not ok:
+                return
+    write_conf("WAN_IF", " ".join(sorted(chosen)))
+    if enabled():
+        apply()
+    else:
+        msg("Saved. The interfaces are filtered when blocking is turned on.", 8, 64)
+
+
+def choose_interfaces():
+    """Checklist of the interfaces with their kind and addresses; the checked ones are
+    saved as WAN_IF."""
+    current = wan_ifaces()
+    found = interfaces(keep=current)
+    auto = default_route_ifaces()
+    # Entries of WAN_IF that are no interface right now (removed, or a pattern like
+    # "eth*") stay in the list, so they are not dropped by accident
+    items = []
+    for name in sorted(set(found) | set(current)):
+        kind, addrs = found.get(name, ("pattern" if "*" in name else "not present", []))
+        info = ([kind] if kind else []) + (["default route"] if name in auto else []) + addrs[:2]
+        items += [name, ", ".join(info)[:56] or "-", "ON" if name in current else "OFF"]
+    rows = len(items) // 3
+    ok, sel = whiptail("--separate-output", "--checklist",
+                       "Interfaces reachable from the internet. Leave VPN interfaces unchecked, "
+                       "they stay unfiltered.\nSpace = on/off, Enter = save",
+                       str(min(22, 9 + rows)), "76", str(min(13, rows)), *items)
+    if not ok:
+        return
+    chosen = sel.split()
+    if not chosen:
+        msg("No interface checked. Choose at least one, or use the automatic choice.", 8, 64)
+        return
+    if read_conf()[1].get("WAN_IF", "").split() and sorted(chosen) == current:
+        return
+    set_wan_if(chosen)
+
+
+def edit_interfaces():
+    """Filtered interfaces: automatic (default routes) or chosen; loops until Back."""
+    while True:
+        chosen = bool(read_conf()[1].get("WAN_IF", "").split())
+        auto = default_route_ifaces()
+        warn = unfiltered_warning(wan_ifaces())
+        ok, choice = whiptail("--cancel-button", "Back", "--default-item", "2" if chosen else "1",
+                              "--menu",
+                              f"Filtered: {iface_summary()}\n\n"
+                              "New connections on these interfaces are checked, all others (VPN, "
+                              "Docker, lo) stay unfiltered. Choosing an entry reloads the rules."
+                              + ("\n" + warn if warn else ""),
+                              str(15 + warn.count("\n")), "76", "2",
+                              "1", f"Automatic: interfaces of the default routes "
+                                   f"({' '.join(auto) or 'none found'})",
+                              "2", "Choose interfaces")
+        if not ok:
+            return
+        if choice == "1":
+            set_wan_if([])
+        else:
+            choose_interfaces()
+
+
 def show_status():
     """Overview: config vs. loaded state, request totals, geo data and allowed countries."""
     a = allowed()
@@ -641,14 +847,16 @@ def show_status():
         for key, name in CONTINENTS)
     cache = geo_files()
     since = stats_since()
+    warn = unfiltered_warning(filtered_ifaces())
     msg(f"Blocking (config):     {'ON' if enabled() else 'OFF'}\n"
         f"Rules loaded:          {'yes' if table_loaded() else 'no'}\n"
         f"Statistics since:      {format_time(since) if since else '-'}\n"
         f"Requests:              {counter('allowed'):,} allowed, {counter('blocked'):,} blocked\n"
         f"Geo data:              {cache[-1] if cache else '-'}\n"
-        f"Filtered interfaces:   {' '.join(wan_ifaces()) or '-'}\n"
-        f"Blocked networks:      {len(blocked_nets())}\n\n"
-        f"Allowed countries: {len(a)}\n{per}", 22, 66)
+        f"Filtered interfaces:   {iface_summary()}\n"
+        f"Blocked networks:      {len(blocked_nets())}\n"
+        f"{warn + chr(10) if warn else ''}\n"
+        f"Allowed countries: {len(a)}\n{per}", 22 + warn.count("\n"), 76)
 
 
 def show_allowed():
@@ -1267,20 +1475,25 @@ def main():
         sys.exit("Usage: geowarden (no arguments)")
     while True:
         state = "ON" if enabled() else "OFF"
+        # The public interfaces that stay unfiltered matter only while blocking is on
+        warn = unfiltered_warning(filtered_ifaces()) if state == "ON" else ""
         ok, choice = whiptail("--cancel-button", "Quit", "--menu",
-                              f"Blocking is {state} - {len(allowed())} countries allowed", "18", "60", "7",
+                              f"Blocking is {state} - {len(allowed())} countries allowed\n"
+                              f"Interface: {iface_summary()}{warn}",
+                              str(17 + warn.count("\n")), "76", "8",
                               "1", "Show status",
                               "2", "Turn blocking off" if state == "ON" else "Turn blocking on",
                               "3", "Edit countries (by continent)",
                               "4", "Show allowed countries",
                               "5", "Blocked networks",
-                              "6", "Statistics and world map",
-                              "7", "Live view")
+                              "6", "Filtered interfaces",
+                              "7", "Statistics and world map",
+                              "8", "Live view")
         if not ok:
             return
         # Dispatch the chosen menu tag to its function
         {"1": show_status, "2": toggle_enabled, "3": edit_countries, "4": show_allowed,
-         "5": edit_blocked_nets, "6": statistics, "7": live_view}[choice]()
+         "5": edit_blocked_nets, "6": edit_interfaces, "7": statistics, "8": live_view}[choice]()
 
 
 if __name__ == "__main__":
