@@ -1480,7 +1480,7 @@ def main():
         ok, choice = whiptail("--cancel-button", "Quit", "--menu",
                               f"Blocking is {state} - {len(allowed())} countries allowed\n"
                               f"Interface: {iface_summary()}{warn}",
-                              str(20 + warn.count("\n")), "76", "8",
+                              str(17 + warn.count("\n")), "76", "8",
                               "1", "Show status",
                               "2", "Turn blocking off" if state == "ON" else "Turn blocking on",
                               "3", "Edit countries (by continent)",

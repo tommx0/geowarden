@@ -1,3 +1,18 @@
+geowarden (1.7.0) stable; urgency=medium
+
+  * Filtered interfaces in the menu (new entry "Filtered interfaces"):
+    automatic (the interfaces of the default routes, as before) or chosen
+    from a checklist of the interfaces with their kind and addresses.
+  * The main menu and the status show the filtered interfaces, and the
+    ones of the loaded rules if they differ.
+  * Warning about interfaces with a public address that are not filtered,
+    in the main menu, the status and after loading the rules. VPN
+    interfaces (WireGuard, tun) are left out.
+  * The menu warns before a change filters the interface of the own SSH
+    connection while its address is not allowed.
+
+ -- Thomas Marx <103289949+tommx0@users.noreply.github.com>  Mon, 16 Nov 2026 15:54:00 +0000
+
 geowarden (1.6.0) stable; urgency=medium
 
   * Blocked networks (BLOCK_NETS): networks or addresses that are always
