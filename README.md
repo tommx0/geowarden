@@ -23,6 +23,7 @@ Everything else is dropped before it reaches SSH, your web server or your Docker
 - **Daily geo data updates.** Country data comes from [DB-IP Lite](https://db-ip.com/db/lite.php). It is loaded at boot and refreshed every day by a systemd timer.
 - **Hard to lock yourself out.** Blocking is off after installation. Established connections stay open. The menu warns you if your own SSH address would be blocked.
 - **Plays well with VPNs and Docker.** VPN interfaces (Tailscale, WireGuard, …), Docker-internal traffic and ports you choose stay unfiltered. Filtering happens *before* Docker's DNAT, so published container ports are covered too.
+- **You choose the public interfaces.** By default geowarden filters the interfaces of the default routes. You can choose others in the menu, which shows the filtered interface at all times and warns you if another interface has a public address but is not filtered.
 - **Fails safe.** A failed download or a broken data file leaves the current rules in place. Rules are swapped in a single atomic nftables transaction.
 - **Leaves other firewalls alone.** geowarden only manages its own table (`inet geowarden`). Docker, ufw, CrowdSec and others are not touched.
 - **IPv4 and IPv6.** Both address families are filtered.
@@ -179,6 +180,17 @@ Open **Blocked networks** in the menu to keep a list of networks or single addre
 
 **Scanner suspected.** geowarden only sees connection attempts, not what a client does afterwards, so it can only give a hint. It flags networks that send requests from many different addresses: 8 or more in an IPv4 /24 or IPv6 /48, or 12 or more in an IPv4 /22. The /22 level catches scanners that spread over a whole block with only a few addresses per /24. Scan farms rotate through the addresses of their block like that, while normal visitors rarely come from that many addresses of one network. Many real users behind one provider can look the same, so geowarden never blocks on its own: it only marks such networks in **Top 10 addresses**, **Suspicious networks** and the live view. If your web server logs requests, compare them with the hint. A network that keeps connecting but never shows up in the web server's access log is a scanner.
 
+### Filtered interfaces
+
+Only new connections on the public interfaces are checked. The main menu shows them below the blocking state, for example `Interface: eth0 (automatic)`. Open **Filtered interfaces** in the menu to change them (`WAN_IF`):
+
+- **Automatic** filters the interfaces of the default routes (IPv4 and IPv6). geowarden looks them up each time it loads the rules, so at boot and once a day. Choose it again to reload the rules after the default route changed.
+- **Choose interfaces** shows a checklist of all interfaces with their kind (e.g. `wireguard`, `bridge`), whether they carry a default route, and their addresses. Check the ones that are reachable from the internet. Leave VPN interfaces unchecked. Docker's bridges and `veth` interfaces are not listed, because traffic to containers is filtered on the public interface.
+
+geowarden warns you in the main menu, the status and after loading the rules if an interface that is not filtered has a public address, for example a second network card for an additional IP without a default route. Private, CGNAT (Tailscale's `100.64.0.0/10`) and ULA addresses do not count, and VPN interfaces (WireGuard, `tun`) get no warning. If the loaded rules filter other interfaces than the configuration asks for, for example because the default route changed since the last reload, the menu shows both.
+
+The menu warns you before a change filters the interface of your own SSH connection while your address is not allowed.
+
 ### Live view
 
 Open **Live view** in the menu to watch requests as they arrive. Every second the menu reads the statistics again: the country of each new request blinks on the map for three seconds (red and white for blocked, green and white for allowed), and the last 10 requests are listed below with time, result, address, country and how many requests came in that second. `scanner?` marks a suspected scanner network and `listed` an address in the blocked networks. Press `q`, Enter or Esc to go back.
@@ -187,13 +199,13 @@ The live view only runs while it is open and does not change the rules. It shows
 
 ### Configuration
 
-All settings live in `/etc/geowarden.conf`. The menu edits `ENABLED`, `COUNTRIES`, `BLOCK_NETS` and `BLOCK_NETS_OPEN_PORTS` for you. Edit the others by hand, then reload the rules.
+All settings live in `/etc/geowarden.conf`. The menu edits `ENABLED`, `COUNTRIES`, `WAN_IF`, `BLOCK_NETS` and `BLOCK_NETS_OPEN_PORTS` for you. Edit the others by hand, then reload the rules.
 
 | Variable | Meaning | Default |
 |---|---|---|
 | `ENABLED` | Blocking on (`yes`) or off (`no`) | `no` |
 | `COUNTRIES` | Allowed countries as lower-case ISO 3166 codes, separated by spaces | Europe without RU/BY, plus US |
-| `WAN_IF` | Interfaces to filter. Empty means the interfaces of the default routes | empty |
+| `WAN_IF` | Interfaces to filter, separated by spaces (`eth*` matches every name starting with `eth`). Empty means the interfaces of the default routes. See [Filtered interfaces](#filtered-interfaces) | empty |
 | `OPEN_TCP` | TCP ports open to the whole world | `80` (Let's Encrypt HTTP-01) |
 | `OPEN_UDP` | UDP ports open to the whole world | `41641` (Tailscale) |
 | `BLOCK_NETS` | Networks or addresses that are always blocked, whatever their country, separated by spaces | empty |
