@@ -20,7 +20,7 @@ Everything else is dropped before it reaches SSH, your web server or your Docker
 ## Features
 
 - **Pick countries by continent.** Allow or block a whole continent with one choice, or tick countries one by one.
-- **Daily geo data updates.** Country data comes from [DB-IP Lite](https://db-ip.com/db/lite.php). It is loaded at boot and refreshed every day by a systemd timer.
+- **Daily geo data updates.** Country data comes from [DB-IP Lite](https://db-ip.com/db/lite.php). It is loaded at boot as soon as the network is up and refreshed every day by a systemd timer.
 - **Hard to lock yourself out.** Blocking is off after installation. Established connections stay open. The menu warns you if your own SSH address would be blocked.
 - **Plays well with VPNs and Docker.** VPN interfaces (Tailscale, WireGuard, …), Docker-internal traffic and ports you choose stay unfiltered. Filtering happens *before* Docker's DNAT, so published container ports are covered too.
 - **You choose the public interfaces.** By default geowarden filters the interfaces of the default routes. You can choose others in the menu, which shows the filtered interface at all times and warns you if another interface has a public address but is not filtered.
@@ -106,7 +106,7 @@ curl -LO https://github.com/tommx0/geowarden/releases/download/v1.7.0/geowarden_
 sudo apt install ./geowarden_1.7.0_all.deb
 ```
 
-This installs the menu tool, the systemd service and the timer. The timer is enabled right away. **Blocking stays off** until you turn it on.
+This installs the menu tool, the systemd service and the timer. Both are enabled right away. **Blocking stays off** until you turn it on.
 
 ### Alternative: build it yourself
 
@@ -147,7 +147,7 @@ sudo nft list chain inet geowarden prerouting
 | Open the menu | `sudo geowarden` |
 | Edit the configuration | `/etc/geowarden.conf` |
 | Reload the rules (e.g. after a manual edit) | `sudo systemctl start geowarden.service` |
-| Emergency off until the next timer run | `sudo nft delete table inet geowarden` |
+| Emergency off until the next run or reboot | `sudo nft delete table inet geowarden` |
 | Show recent runs and errors | `journalctl -u geowarden.service` |
 
 ### Statistics and world map
@@ -224,7 +224,7 @@ OPEN_UDP=""
 
 ## How it works
 
-`geowarden.timer` runs `geowarden-apply` one minute after boot and once a day. The script
+`geowarden.service` runs `geowarden-apply` at boot, as soon as the network is up and after `nftables.service`. `geowarden.timer` runs it again once a day, at a random time within an hour after midnight. The script
 
 1. uses this month's DB-IP file from `/var/cache/geowarden`, or downloads it (falling back to last month's file early in the month),
 2. extracts the IP ranges of the allowed countries and joins neighbouring ranges into one,
@@ -256,7 +256,7 @@ Every request that reaches the country check is counted per source address in dy
 ## Uninstall
 
 ```bash
-sudo apt remove geowarden   # removes the rules and disables the timer
+sudo apt remove geowarden   # removes the rules and disables the service and the timer
 sudo apt purge geowarden    # also deletes /etc/geowarden.conf and the geo data cache
 ```
 

@@ -1,3 +1,17 @@
+geowarden (1.7.1) stable; urgency=medium
+
+  * The rules are loaded at boot as soon as the network is up, by
+    geowarden.service itself. Before, the timer's random delay of up to an
+    hour also applied to the run one minute after boot, and until then
+    nothing was blocked (GitHub issue #9).
+  * geowarden.timer only reloads the rules daily, at a random time within
+    an hour after midnight.
+  * geowarden.service starts after nftables.service, whose "flush ruleset"
+    would otherwise remove the table again.
+  * Upgrades enable geowarden.service; removing the package disables it.
+
+ -- Thomas Marx <103289949+tommx0@users.noreply.github.com>  Mon, 23 Nov 2026 22:00:00 +0000
+
 geowarden (1.7.0) stable; urgency=medium
 
   * Filtered interfaces in the menu (new entry "Filtered interfaces"):
