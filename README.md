@@ -273,6 +273,9 @@ It changes your server's firewall: a wrong setting can lock you out or let unwan
 Geolocation data can be wrong or out of date. The author accepts no liability for damage,
 data loss, downtime or any other consequences of using this software.
 
+geowarden is a non-commercial hobby project that I develop in my spare time.
+There is no guarantee that it will be maintained, updated or supported in the future.
+
 ## License
 
 geowarden is released under the [MIT License](LICENSE), which includes the same disclaimer of warranty and liability.
