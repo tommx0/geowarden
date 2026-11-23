@@ -1,8 +1,9 @@
 [Unit]
-Description=geowarden: reload rules at boot and daily
+Description=geowarden: reload rules daily
 
 [Timer]
-OnBootSec=1min
+# Daily only: the delay would also apply to a run at boot, which geowarden.service
+# does itself (WantedBy=multi-user.target)
 OnCalendar=daily
 RandomizedDelaySec=1h
 Persistent=true

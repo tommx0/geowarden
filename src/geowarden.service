@@ -2,8 +2,14 @@
 Description=geowarden: apply the country allowlist via nftables
 Documentation=file:/usr/share/doc/geowarden/README
 Wants=network-online.target
-After=network-online.target
+# After nftables.service, whose "flush ruleset" would otherwise remove the table again.
+# Only the order: nftables.service is not started if it is off.
+After=network-online.target nftables.service
 
 [Service]
 Type=oneshot
 ExecStart=/usr/sbin/geowarden-apply
+
+[Install]
+# At boot, as soon as the network is up. The daily reload comes from geowarden.timer.
+WantedBy=multi-user.target

@@ -11,8 +11,9 @@ if [ "$1" = "configure" ]; then
 	# Only with systemd running (not e.g. in a container build or chroot)
 	if [ -d /run/systemd/system ]; then
 		systemctl daemon-reload
-		# The timer loads the rules at boot and refreshes them daily
-		systemctl enable geowarden.timer >/dev/null 2>&1 || true
+		# The service loads the rules at boot, the timer refreshes them daily.
+		# Also on upgrades: up to 1.7.0 only the timer was enabled.
+		systemctl enable geowarden.service geowarden.timer >/dev/null 2>&1 || true
 		systemctl start geowarden.timer || true
 		# After an upgrade, reload the rules with the new version
 		if grep -q '^ENABLED="yes"' /etc/geowarden.conf; then

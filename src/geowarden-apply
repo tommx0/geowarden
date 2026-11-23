@@ -3,8 +3,8 @@
 
 Reads /etc/geowarden.conf, takes the IP ranges of the allowed countries from the DB-IP
 geolocation data and loads them together with the filter chain. New connections on the
-public interfaces from any other address are dropped. Run daily by geowarden.timer and
-by the menu "geowarden" after every change.
+public interfaces from any other address are dropped. Run at boot by geowarden.service,
+daily by geowarden.timer and by the menu "geowarden" after every change.
 
 If anything goes wrong (download, data, configuration, nft) the current rules stay as
 they are and the script exits with an error message.
